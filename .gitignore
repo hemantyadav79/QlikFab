@@ -27,3 +27,8 @@ $RECYCLE.BIN/
 *.zip
 *.log
 extracted_result/
+
+# Node & IDE
+node_modules/
+.claude/
+

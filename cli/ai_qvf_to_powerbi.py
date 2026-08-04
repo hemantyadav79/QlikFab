@@ -22,6 +22,16 @@ import uuid
 import zipfile
 from pathlib import Path
 
+from qlik_script_parser import parse_load_script, QlikTable, QlikField, QlikSource
+from powerquery_builder import (
+    TypeResolver,
+    build_partition_expression,
+    build_root_parameter_expression,
+    default_root_for,
+    dropped_columns,
+    ROOT_PARAMETER,
+)
+
 # Configure Windows console encoding
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
@@ -42,6 +52,8 @@ class AIConverterBrain:
         self.ollama_url = ollama_url
         self.is_available = self._check_availability()
         self.cache = {}
+        # Qlik expressions that could not be translated with confidence.
+        self.unresolved = []
 
     def _check_availability(self) -> bool:
         """Check if Ollama server is running locally."""
@@ -56,17 +68,38 @@ class AIConverterBrain:
             pass
         return False
 
+    # Qlik aggregation -> (DAX function, measure-name suffix)
+    AGGREGATIONS = {
+        "sum": ("SUM", "Sum"),
+        "avg": ("AVERAGE", "Average"),
+        "min": ("MIN", "Minimum"),
+        "max": ("MAX", "Maximum"),
+        "median": ("MEDIAN", "Median"),
+        "stdev": ("STDEV.P", "Std Dev"),
+        "only": ("MIN", "Value"),
+    }
+
+    # Matches a Qlik field reference, bracketed or bare.
+    FIELD_PATTERN = r"(?:\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_]*))"
+
     def translate_expression_to_dax(self, qlik_expr: str, table_name: str, sample_columns: list) -> tuple:
         """
-        Translates a Qlik expression to DAX measure (Measure Name, DAX Formula).
-        Uses Ollama if available, otherwise falls back to smart regex rules.
+        Translate a Qlik expression to a DAX measure (name, formula).
+
+        Expressions this method cannot translate with confidence are returned as
+        BLANK() measures carrying the original Qlik text in a comment, and are
+        recorded in self.unresolved. Substituting a plausible-looking formula
+        (the previous behaviour returned COUNTROWS for anything unrecognised)
+        produces reports that are quietly wrong, which is the failure mode this
+        tool exists to avoid.
         """
         if not qlik_expr or not qlik_expr.strip():
             return ("Total Count", f"COUNTROWS('{table_name}')")
 
         qlik_key = qlik_expr.strip()
-        if qlik_key in self.cache:
-            return self.cache[qlik_key]
+        cache_key = (table_name, qlik_key)
+        if cache_key in self.cache:
+            return self.cache[cache_key]
 
         expr_clean = qlik_expr.strip()
 
@@ -76,32 +109,79 @@ class AIConverterBrain:
                     return sc
             return c_raw
 
-        # 1. Guaranteed Smart Universal Rules for Standard Aggregations
-        match_count = re.search(r"Count\s*\(\s*(?:DISTINCT\s+)?([a-zA-Z0-9_]+)\s*\)", expr_clean, re.IGNORECASE)
-        if match_count:
-            col = _match_case(match_count.group(1))
-            if "distinct" in expr_clean.lower():
-                result = (f"Unique {col.title()}", f"DISTINCTCOUNT('{table_name}'[{col}])")
+        def _finish(result):
+            self.cache[cache_key] = result
+            return result
+
+        def _label(col: str) -> str:
+            return col if any(ch.isupper() for ch in col) else col.title()
+
+        # 1. Count / Count(DISTINCT ...)
+        match_count = re.search(
+            r"\bCount\s*\(\s*(DISTINCT\s+)?" + self.FIELD_PATTERN + r"\s*\)",
+            expr_clean, re.IGNORECASE,
+        )
+        if match_count and "{" not in expr_clean:
+            col = _match_case(match_count.group(2) or match_count.group(3))
+            if match_count.group(1):
+                return _finish((f"Unique {_label(col)}", f"DISTINCTCOUNT('{table_name}'[{col}])"))
+            return _finish((f"{_label(col)} Count", f"COUNTA('{table_name}'[{col}])"))
+
+        # 2. Simple single-field aggregations
+        for qlik_fn, (dax_fn, suffix) in self.AGGREGATIONS.items():
+            match = re.search(
+                r"\b" + qlik_fn + r"\s*\(\s*" + self.FIELD_PATTERN + r"\s*\)",
+                expr_clean, re.IGNORECASE,
+            )
+            if match and "{" not in expr_clean:
+                col = _match_case(match.group(1) or match.group(2))
+                return _finish((f"{_label(col)} {suffix}", f"{dax_fn}('{table_name}'[{col}])"))
+
+        # 3. Ratio of two aggregations, e.g. Sum(Profit)/Sum(Sales)
+        ratio = re.fullmatch(
+            r"\s*(Sum|Avg|Count)\s*\(\s*" + self.FIELD_PATTERN + r"\s*\)\s*/\s*"
+            r"(Sum|Avg|Count)\s*\(\s*" + self.FIELD_PATTERN + r"\s*\)\s*",
+            expr_clean, re.IGNORECASE,
+        )
+        if ratio:
+            fn1 = self.AGGREGATIONS.get(ratio.group(1).lower(), ("SUM", ""))[0]
+            fn2 = self.AGGREGATIONS.get(ratio.group(4).lower(), ("SUM", ""))[0]
+            if ratio.group(1).lower() == "count":
+                fn1 = "COUNTA"
+            if ratio.group(4).lower() == "count":
+                fn2 = "COUNTA"
+            num = _match_case(ratio.group(2) or ratio.group(3))
+            den = _match_case(ratio.group(5) or ratio.group(6))
+            return _finish((
+                f"{_label(num)} per {_label(den)}",
+                f"DIVIDE({fn1}('{table_name}'[{num}]), {fn2}('{table_name}'[{den}]), 0)",
+            ))
+
+        # 4. Set analysis with a single equality filter:
+        #    Count({<Status={'Open'}>} CaseID)
+        set_match = re.fullmatch(
+            r"\s*(Sum|Avg|Count|Min|Max)\s*\(\s*\{\s*<\s*" + self.FIELD_PATTERN +
+            r"\s*=\s*\{([^}]*)\}\s*>\s*\}\s*" + self.FIELD_PATTERN + r"\s*\)\s*",
+            expr_clean, re.IGNORECASE,
+        )
+        if set_match:
+            agg = set_match.group(1).lower()
+            dax_fn = "COUNTA" if agg == "count" else self.AGGREGATIONS[agg][0]
+            filter_col = _match_case(set_match.group(2) or set_match.group(3))
+            raw_values = [v.strip().strip("'\"") for v in set_match.group(4).split(",") if v.strip()]
+            target_col = _match_case(set_match.group(5) or set_match.group(6))
+            if len(raw_values) == 1:
+                condition = f"'{table_name}'[{filter_col}] = \"{raw_values[0]}\""
             else:
-                result = (f"{col.title()} Count", f"COUNTA('{table_name}'[{col}])")
-            self.cache[qlik_key] = result
-            return result
+                joined = ", ".join(f'"{v}"' for v in raw_values)
+                condition = f"'{table_name}'[{filter_col}] IN {{{joined}}}"
+            return _finish((
+                f"{_label(target_col)} {self.AGGREGATIONS.get(agg, ('', 'Count'))[1] if agg != 'count' else 'Count'}"
+                f" ({raw_values[0] if len(raw_values) == 1 else 'Filtered'})",
+                f"CALCULATE({dax_fn}('{table_name}'[{target_col}]), {condition})",
+            ))
 
-        match_sum = re.search(r"Sum\s*\(\s*([a-zA-Z0-9_]+)\s*\)", expr_clean, re.IGNORECASE)
-        if match_sum:
-            col = _match_case(match_sum.group(1))
-            result = (f"{col.title()} Sum", f"SUM('{table_name}'[{col}])")
-            self.cache[qlik_key] = result
-            return result
-
-        match_avg = re.search(r"Avg\s*\(\s*([a-zA-Z0-9_]+)\s*\)", expr_clean, re.IGNORECASE)
-        if match_avg:
-            col = _match_case(match_avg.group(1))
-            result = (f"{col.title()} Average", f"AVERAGE('{table_name}'[{col}])")
-            self.cache[qlik_key] = result
-            return result
-
-        # 2. If Ollama is running, ask AI to translate complex non-standard expressions
+        # 5. If Ollama is running, ask AI to translate complex non-standard expressions
         if self.is_available and self.provider == "ollama":
             prompt = (
                 f"You are a Power BI DAX expert. Translate this Qlik expression into a Power BI DAX formula.\n"
@@ -122,13 +202,24 @@ class AIConverterBrain:
                     if dax.endswith("}") and "{" not in dax:
                         dax = dax[:-1].strip()
                     result = (res["measure_name"].strip(), dax)
-                    self.cache[qlik_key] = result
+                    self.cache[cache_key] = result
                     return result
             except Exception as e:
-                print(f"  [AI Warn] Ollama translation fallback used for '{qlik_expr}': {e}")
+                print(f"  [AI Warn] Ollama translation failed for '{qlik_expr}': {e}")
 
-        # 3. Generic default
-        return ("Total Records", f"COUNTROWS('{table_name}')")
+        # 6. Untranslatable: surface it instead of inventing a formula.
+        self.unresolved.append({"expression": qlik_key, "table": table_name})
+        print(f"  [UNRESOLVED] No confident DAX translation for: {qlik_key}")
+
+        short = re.sub(r"[^A-Za-z0-9 ]+", " ", qlik_key).strip()
+        short = re.sub(r"\s+", " ", short)[:40] or "Expression"
+        name = f"[Needs Review] {short}"
+        dax = (
+            f"-- TODO: translate this Qlik expression manually.\n"
+            f"-- Original Qlik: {qlik_key}\n"
+            f"BLANK()"
+        )
+        return _finish((name, dax))
 
     def _call_ollama_json(self, prompt: str) -> dict:
         """Make HTTP POST call to local Ollama API."""
@@ -157,6 +248,15 @@ class AIConverterBrain:
 
 def new_guid():
     return str(uuid.uuid4())
+
+def safe_name(name: str) -> str:
+    """Normalise a Qlik table name into a Tabular-safe identifier."""
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", (name or "").strip()).strip("_")
+    if not cleaned:
+        return "QlikTable"
+    if cleaned[0].isdigit():
+        cleaned = f"T_{cleaned}"
+    return cleaned
 
 def make_column_ref(table_name, column_name):
     return {
@@ -196,7 +296,13 @@ def make_title_object(title_text):
 # ============================================================
 
 class UniversalModelGenerator:
-    """Dynamically generates model.bim for ANY table and ANY connection."""
+    """
+    Generates model.bim from what the Qlik app actually declares.
+
+    Table set, field lists and data sources come from the load script; column
+    types come from the .qvf data-model metadata. Nothing here fabricates rows
+    or infers a type from a column name.
+    """
 
     def __init__(self, extraction_data: dict, ai_brain: AIConverterBrain, server: str = None, database: str = "postgres", mode: str = "offline"):
         self.data = extraction_data
@@ -204,49 +310,116 @@ class UniversalModelGenerator:
         self.server = server
         self.database = database
         self.mode = mode
-        
-        # Dynamically discover primary table name
-        tables = self.data.get("data_model", {}).get("tables", [])
-        if tables and len(tables) > 0:
-            self.table_name = re.sub(r"[^a-zA-Z0-9_]", "_", tables[0].get("name", "QlikTable"))
-        else:
-            self.table_name = "QlikTable"
 
-    def _get_data_type(self, col_name: str) -> str:
-        name_l = col_name.lower()
-        numeric_keywords = [
-            "sales", "profit", "quantity", "amount", "price", "discount", "cost", "total",
-            "val", "num", "id", "count", "score", "lat", "lon", "views", "subscribers",
-            "duration", "rating", "year", "revenue", "engagement", "rate", "ratio",
-            "budget", "actual", "target", "percent", "pct", "days", "hours", "age",
-            "salary", "margin", "tax", "fee", "bonus", "commission", "units", "orders",
-            "kpi", "meas", "avg", "min", "max", "sum", "index", "rank", "mil", "_k", "_m",
-            "aging", "closed", "open", "time", "cases", "value", "unit", "expense", "income", "balance"
+        self.script_tables = self._discover_tables()
+        self.resolver = TypeResolver(
+            self.data.get("data_model", {}).get("fields", []),
+            self.script_tables,
+        )
+
+        # Map each field to the table that owns it, so visuals bind correctly.
+        self.field_owner = {}
+        for table in self.script_tables:
+            safe = safe_name(table.name)
+            for field in table.fields:
+                self.field_owner.setdefault(field.name.lower(), safe)
+
+        # The largest table is the sensible default for visuals whose field
+        # references cannot be resolved.
+        self.table_name = safe_name(
+            max(self.script_tables, key=lambda t: len(t.fields)).name
+        ) if self.script_tables else "QlikTable"
+
+        self.table_status = {}
+
+    def _discover_tables(self) -> list:
+        """
+        Build the table list from the load script, falling back to the data
+        model when the script is unavailable or unparseable.
+        """
+        tables = [
+            t for t in parse_load_script(self.data.get("load_script", ""))
+            if not t.is_mapping and not t.is_hidden
         ]
-        if any(k in name_l for k in numeric_keywords):
-            return "double"
-        return "string"
+        if tables:
+            return tables
+
+        # Fallback: one table holding whatever fields the data model reported.
+        fields = self.data.get("data_model", {}).get("fields", [])
+        dm_tables = self.data.get("data_model", {}).get("tables", [])
+        name = dm_tables[0].get("name", "QlikTable") if dm_tables else "QlikTable"
+        if not fields:
+            return []
+        return [
+            QlikTable(
+                name=name,
+                fields=[QlikField(name=f["name"]) for f in fields],
+                source=QlikSource(kind="unknown"),
+            )
+        ]
 
     def generate(self) -> dict:
-        fields = self.data.get("data_model", {}).get("fields", [])
-        columns_list = [f["name"] for f in fields] if fields else ["ID"]
+        model_tables = []
+        query_order = []
 
-        # 1. Build dynamic columns
-        columns = []
-        for field in fields:
-            col_name = field["name"]
-            columns.append({
-                "name": col_name,
-                "dataType": self._get_data_type(col_name),
-                "sourceColumn": col_name,
+        for table in self.script_tables:
+            safe = safe_name(table.name)
+            query_order.append(safe)
+
+            expression, status, column_names = build_partition_expression(table, self.resolver)
+
+            columns = [
+                {
+                    "name": name,
+                    "dataType": self.resolver.resolve(name),
+                    "sourceColumn": name,
+                    "lineageTag": new_guid(),
+                }
+                for name in column_names
+            ]
+            dropped = dropped_columns(table) if table.source.is_file else []
+            self.table_status[safe] = {
+                "status": status,
+                "kind": table.source.kind,
+                "path": table.source.path or table.source.resident_table or "",
+                "columns": len(columns),
+                "dropped": dropped,
+                "typed_columns": sum(
+                    1 for c in columns if c["dataType"] != "string"
+                ),
+            }
+
+            model_tables.append({
+                "name": safe,
                 "lineageTag": new_guid(),
+                "columns": columns,
+                "measures": self._build_measures(table, safe, column_names),
+                "partitions": [{
+                    "name": f"{safe}-partition",
+                    "mode": "import",
+                    "source": {"type": "m", "expression": expression},
+                }],
+                "annotations": [{
+                    "name": "QlikMigrationSource",
+                    "value": json.dumps({
+                        "kind": table.source.kind,
+                        "path": table.source.path or table.source.resident_table,
+                        "status": status,
+                    }),
+                }],
             })
 
-        # 2. Build dynamic DAX measures from all charts using AI Brain
-        measures = self._generate_ai_measures(columns_list)
-
-        # 3. Dynamic M-Expression (Power Query)
-        m_expression = self._build_dynamic_m_script()
+        expressions = []
+        if any(t.source.is_file for t in self.script_tables):
+            expressions.append({
+                "name": ROOT_PARAMETER,
+                "kind": "m",
+                "expression": build_root_parameter_expression(
+                    default_root_for(self.script_tables)
+                ),
+                "lineageTag": new_guid(),
+                "annotations": [{"name": "PBI_ResultType", "value": "Text"}],
+            })
 
         model = {
             "name": "SemanticModel",
@@ -259,129 +432,67 @@ class UniversalModelGenerator:
                 },
                 "defaultPowerBIDataSourceVersion": "powerBI_V3",
                 "sourceQueryCulture": "en-US",
-                "tables": [
-                    {
-                        "name": self.table_name,
-                        "lineageTag": new_guid(),
-                        "columns": columns,
-                        "measures": measures,
-                        "partitions": [
-                            {
-                                "name": f"{self.table_name}-partition",
-                                "mode": "import",
-                                "source": {
-                                    "type": "m",
-                                    "expression": m_expression
-                                }
-                            }
-                        ]
-                    }
-                ],
+                "tables": model_tables,
                 "annotations": [
-                    {"name": "PBI_QueryOrder", "value": json.dumps([self.table_name])},
+                    {"name": "PBI_QueryOrder", "value": json.dumps(query_order)},
                     {"name": "PBIDesktopVersion", "value": "2.138.1004.0 (24.10)"}
                 ]
             }
         }
+        if expressions:
+            model["model"]["expressions"] = expressions
         return model
 
-    def _generate_ai_measures(self, columns_list: list) -> list:
-        """Collect and translate all Qlik expressions to DAX measures."""
-        measures_dict = {}
-        sheets = self.data.get("sheets", [])
+    def _build_measures(self, table, safe: str, column_names: list) -> list:
+        """
+        Build DAX measures for one table: a row count, a SUM per genuinely
+        measurable column, and translations of the Qlik chart expressions that
+        reference this table's fields.
+        """
+        measures = {}
 
-        # Add a default universal row count measure
-        default_name = f"Total {self.table_name} Rows"
-        measures_dict[default_name] = {
-            "name": default_name,
-            "expression": f"COUNTROWS('{self.table_name}')",
+        row_count = f"Total {safe} Rows"
+        measures[row_count] = {
+            "name": row_count,
+            "expression": f"COUNTROWS('{safe}')",
             "lineageTag": new_guid(),
         }
 
-        # Dynamically generate SUM measures ONLY for numeric (double) columns
-        for col in columns_list:
-            if self._get_data_type(col) == "double":
-                meas_name = f"Total {col}"
-                if meas_name not in measures_dict:
-                    measures_dict[meas_name] = {
-                        "name": meas_name,
-                        "expression": f"SUM('{self.table_name}'[{col}])",
-                        "lineageTag": new_guid(),
-                    }
+        for col in column_names:
+            if not self.resolver.is_measurable(col):
+                continue
+            name = f"Total {col}"
+            measures.setdefault(name, {
+                "name": name,
+                "expression": f"SUM('{safe}'[{col}])",
+                "lineageTag": new_guid(),
+            })
 
-        for sheet in sheets:
+        owned = {c.lower() for c in column_names}
+
+        for sheet in self.data.get("sheets", []):
             for chart in sheet.get("charts", []):
                 for meas in chart.get("measures", []):
-                    qlik_expr = meas.get("expression", "")
-                    if qlik_expr:
-                        name, dax = self.ai.translate_expression_to_dax(qlik_expr, self.table_name, columns_list)
-                        if name not in measures_dict:
-                            measures_dict[name] = {
-                                "name": name,
-                                "expression": dax,
-                                "lineageTag": new_guid(),
-                            }
-        return list(measures_dict.values())
+                    expr = meas.get("expression", "")
+                    if not expr or not self._expression_targets(expr, owned):
+                        continue
+                    name, dax = self.ai.translate_expression_to_dax(expr, safe, column_names)
+                    measures.setdefault(name, {
+                        "name": name,
+                        "expression": dax,
+                        "lineageTag": new_guid(),
+                    })
 
-    def _build_dynamic_m_script(self) -> list:
-        """Inspect load script to detect PostgreSQL/SQL or generate generic table M script."""
-        script = self.data.get("load_script", "")
-        
-        # Rasta 1: Live mode (only if --mode live explicitly requested or custom --server passed)
-        if self.mode == "live" or self.server:
-            server = self.server if self.server else "db.xprsawibbuzvegcfjnrb.supabase.co"
-            db = self.database if self.database else "postgres"
-            
-            return [
-                "let",
-                f'    Source = PostgreSQL.Database("{server}", "{db}"),',
-                f'    public_{self.table_name} = Source{{[Schema="public", Item="{self.table_name}"]}}[Data]',
-                "in",
-                f"    public_{self.table_name}"
-            ]
+        return list(measures.values())
 
-        # Rasta 2: Universal Offline Mode (100% Zero DB Login, Zero Errors, Plug & Play!)
-        fields = self.data.get("data_model", {}).get("fields", [])
-        col_names = [f.get("name", f"col_{i}") for i, f in enumerate(fields)]
-        if not col_names:
-            col_names = ["ID", "Value"]
-        
-        # Build M #table expression header and 100 rich realistic enterprise sample rows
-        header_str = "{" + ", ".join(f'"{c}"' for c in col_names) + "}"
-        sample_rows = []
-        regions = ["North America", "Europe", "Asia-Pacific", "Latin America"]
-        categories = ["Technology", "Furniture", "Office Supplies", "Enterprise Solutions"]
-        customers = ["Acme Corp", "Global Tech", "Contoso Ltd", "Fabrikam Inc", "Northwind Traders", "AdventureWorks"]
-        dates = ["2025-01-15", "2025-02-20", "2025-03-10", "2025-04-05", "2025-05-18", "2025-06-25", "2025-07-30", "2025-08-14", "2025-09-22", "2025-10-19"]
-        for i in range(1, 101):
-            row_vals = []
-            for c in col_names:
-                c_l = c.lower()
-                if self._get_data_type(c) == "double":
-                    val = (i * 125 + 450) % 8500 + 150
-                    row_vals.append(f'"{val}"')
-                elif "region" in c_l or "country" in c_l or "state" in c_l:
-                    row_vals.append(f'"{regions[i % len(regions)]}"')
-                elif "cat" in c_l or "genre" in c_l or "type" in c_l:
-                    row_vals.append(f'"{categories[i % len(categories)]}"')
-                elif "name" in c_l or "customer" in c_l or "title" in c_l or "client" in c_l:
-                    row_vals.append(f'"{customers[i % len(customers)]} #{i}"')
-                elif "date" in c_l or "year" in c_l or "time" in c_l:
-                    row_vals.append(f'"{dates[i % len(dates)]}"')
-                else:
-                    row_vals.append(f'"{c} Item {i}"')
-            sample_rows.append("{" + ", ".join(row_vals) + "}")
-        rows_str = ", ".join(sample_rows)
-
-        type_list = ", ".join(f'{{"{c}", ' + ("type number" if self._get_data_type(c) == "double" else "type text") + "}" for c in col_names)
-
-        return [
-            "let",
-            f"    Source = #table({header_str}, {{{rows_str}}}),",
-            f"    Typed = Table.TransformColumnTypes(Source, {{{type_list}}})",
-            "in",
-            "    Typed"
-        ]
+    @staticmethod
+    def _expression_targets(expression: str, owned_fields: set) -> bool:
+        """True when a Qlik expression references any of this table's fields."""
+        tokens = {
+            t.strip("[]").lower()
+            for t in re.findall(r"\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*", expression)
+        }
+        return bool(tokens & owned_fields)
 
 
 # ============================================================
@@ -393,10 +504,12 @@ class UniversalVisualGenerator:
 
     SCHEMA = "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.10.0/schema.json"
 
-    def __init__(self, table_name: str, ai_brain: AIConverterBrain, columns_list: list = None):
+    def __init__(self, table_name: str, ai_brain: AIConverterBrain, columns_list: list = None,
+                 field_owner: dict = None):
         self.table_name = table_name
         self.ai = ai_brain
-        self.columns_list = columns_list if columns_list else ["id", "address", "suburb"]
+        self.columns_list = columns_list if columns_list else ["Column1"]
+        self.field_owner = field_owner or {}
         self.visual_counter = 0
 
         self.qlik_to_pbi_map = {
@@ -453,69 +566,77 @@ class UniversalVisualGenerator:
         return visual
 
     def _resolve_col(self, col: str) -> str:
-        if not getattr(self, "columns_list", None):
-            return "id"
+        """Match a Qlik dimension name to a real migrated column, case-insensitively."""
+        if not self.columns_list:
+            return "Column1"
+        raw = str(col or "").strip().strip("[]")
         for c in self.columns_list:
-            if c.lower() == str(col).lower():
+            if c.lower() == raw.lower():
                 return c
         return self.columns_list[0]
 
+    def _owner_of(self, col: str) -> str:
+        """The table that actually holds this column."""
+        return self.field_owner.get(str(col or "").lower(), self.table_name)
+
+    def _measure_binding(self, expression: str) -> tuple:
+        """
+        Resolve a Qlik measure expression to (table, measure name).
+
+        The measure was defined on whichever table owns the fields the
+        expression references, so the visual must project it from there.
+        """
+        tokens = re.findall(r"\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*", expression or "")
+        table = self.table_name
+        for token in tokens:
+            key = token.strip("[]").lower()
+            if key in self.field_owner:
+                table = self.field_owner[key]
+                break
+        name, _ = self.ai.translate_expression_to_dax(expression, table, self.columns_list)
+        return table, name
+
     def _get_default_dim(self) -> str:
-        if not getattr(self, "columns_list", None):
-            return "Category"
+        """Fall back to the first column of the primary table."""
         for c in self.columns_list:
-            c_l = c.lower()
-            if not any(id_k in c_l for id_k in ["id", "code", "key", "num"]) and any(cat_k in c_l for cat_k in ["cat", "region", "country", "name", "title", "genre", "type", "date", "year", "month"]):
+            if self._owner_of(c) == self.table_name:
                 return c
-        for c in self.columns_list:
-            if not any(id_k in c.lower() for id_k in ["id", "code", "key"]):
-                return c
-        return self.columns_list[0]
+        return self.columns_list[0] if self.columns_list else "Column1"
+
+    def _column_projection(self, raw_col: str):
+        col = self._resolve_col(raw_col)
+        table = self._owner_of(col)
+        return make_projection(make_column_ref(table, col), f"{table}.{col}")
+
+    def _measure_projection(self, expression: str):
+        if expression:
+            table, meas = self._measure_binding(expression)
+        else:
+            table, meas = self.table_name, f"Total {self.table_name} Rows"
+        return make_projection(make_measure_ref(table, meas), f"{table}.{meas}")
 
     def _build_query(self, pbi_type: str, dims: list, meass: list) -> dict:
         query_state = {}
-        default_meas = f"Total {self.table_name} Rows"
         default_dim = self._get_default_dim()
+        dim_field = dims[0]["field"] if (dims and dims[0].get("field")) else default_dim
+        meas_expr = meass[0].get("expression") if meass else None
 
-        if pbi_type in ("slicer",):
-            raw_col = dims[0]["field"] if (dims and dims[0].get("field")) else default_dim
-            col = self._resolve_col(raw_col)
-            query_state["Values"] = {
-                "projections": [make_projection(make_column_ref(self.table_name, col), f"{self.table_name}.{col}")]
-            }
-        elif pbi_type in ("card",):
-            if meass and meass[0].get("expression"):
-                meas_name, _ = self.ai.translate_expression_to_dax(meass[0]["expression"], self.table_name, self.columns_list)
-            else:
-                meas_name = default_meas
-            query_state["Values"] = {
-                "projections": [make_projection(make_measure_ref(self.table_name, meas_name), f"{self.table_name}.{meas_name}")]
-            }
-        elif pbi_type in ("tableEx",):
+        if pbi_type == "slicer":
+            query_state["Values"] = {"projections": [self._column_projection(dim_field)]}
+        elif pbi_type == "card":
+            query_state["Values"] = {"projections": [self._measure_projection(meas_expr)]}
+        elif pbi_type == "tableEx":
             projections = []
             if dims and dims[0].get("field"):
-                col = self._resolve_col(dims[0]["field"])
-                projections.append(make_projection(make_column_ref(self.table_name, col), f"{self.table_name}.{col}"))
-            if meass and meass[0].get("expression"):
-                meas_name, _ = self.ai.translate_expression_to_dax(meass[0]["expression"], self.table_name, self.columns_list)
-                projections.append(make_projection(make_measure_ref(self.table_name, meas_name), f"{self.table_name}.{meas_name}"))
+                projections.append(self._column_projection(dims[0]["field"]))
+            if meas_expr:
+                projections.append(self._measure_projection(meas_expr))
             if not projections:
-                col = self._resolve_col(default_dim)
-                projections.append(make_projection(make_column_ref(self.table_name, col), f"{self.table_name}.{col}"))
+                projections.append(self._column_projection(default_dim))
             query_state["Values"] = {"projections": projections}
         else:
-            raw_col = dims[0]["field"] if (dims and dims[0].get("field")) else default_dim
-            col = self._resolve_col(raw_col)
-            query_state["Category"] = {
-                "projections": [make_projection(make_column_ref(self.table_name, col), f"{self.table_name}.{col}")]
-            }
-            if meass and meass[0].get("expression"):
-                meas_name, _ = self.ai.translate_expression_to_dax(meass[0]["expression"], self.table_name, self.columns_list)
-            else:
-                meas_name = default_meas
-            query_state["Y"] = {
-                "projections": [make_projection(make_measure_ref(self.table_name, meas_name), f"{self.table_name}.{meas_name}")]
-            }
+            query_state["Category"] = {"projections": [self._column_projection(dim_field)]}
+            query_state["Y"] = {"projections": [self._measure_projection(meas_expr)]}
 
         return {"queryState": query_state}
 
@@ -543,13 +664,20 @@ class UniversalPBIPGenerator:
         self.definition_dir = self.report_dir / "definition"
         self.pages_dir = self.definition_dir / "pages"
         
-        # Determine table name and columns
-        tables = self.data.get("data_model", {}).get("tables", [])
-        self.table_name = re.sub(r"[^a-zA-Z0-9_]", "_", tables[0]["name"]) if tables else "QlikTable"
-        fields = self.data.get("data_model", {}).get("fields", [])
-        columns_list = [f["name"] for f in fields] if fields else ["id", "address", "suburb"]
-        
-        self.vis_gen = UniversalVisualGenerator(self.table_name, self.ai, columns_list)
+        # Share one model generator so the report and the semantic model agree
+        # on table names, column types and field ownership.
+        self.model_gen = UniversalModelGenerator(
+            self.data, self.ai, self.server, self.database, self.mode
+        )
+        self.table_name = self.model_gen.table_name
+
+        columns_list = [
+            f.name for t in self.model_gen.script_tables for f in t.fields
+        ] or ["Column1"]
+
+        self.vis_gen = UniversalVisualGenerator(
+            self.table_name, self.ai, columns_list, field_owner=self.model_gen.field_owner
+        )
 
     def generate(self):
         print(f"\n{'='*60}")
@@ -639,8 +767,7 @@ class UniversalPBIPGenerator:
         self._write_json(self.model_dir / "definition.pbism", {"version": "1.0", "settings": {}})
 
     def _write_model_bim(self):
-        gen = UniversalModelGenerator(self.data, self.ai, self.server, self.database, self.mode)
-        self._write_json(self.model_dir / "model.bim", gen.generate())
+        self._write_json(self.model_dir / "model.bim", self.model_gen.generate())
 
     def _write_report_json(self):
         report = {
@@ -825,8 +952,7 @@ b'</Types>'
 
         with zipfile.ZipFile(pbit_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("[Content_Types].xml", content_types)
-            gen = UniversalModelGenerator(self.data, self.ai, self.server, self.database, self.mode)
-            model_bim_str = json.dumps(gen.generate(), ensure_ascii=False)
+            model_bim_str = json.dumps(self.model_gen.generate(), ensure_ascii=False)
             zf.writestr("DataModelSchema", model_bim_str.encode("utf-16-le"))
             
             layout_str = json.dumps(universal_layout, ensure_ascii=False)
@@ -849,23 +975,142 @@ b'</Types>'
         
         print(f"  [OK] Saved: {pbit_path.name} (Standalone Universal Template)")
 
-        audit_md = f"""# MICROSOFT FABRIC PBIP MIGRATION AUDIT: {self.project_name}
-=============================================================================
-- Source File: {self.project_name}.qvf
-- Extracted Fields: {len(self.data.get('fields', []))}
-- Report Sheets: {len(self.data.get('sheets', []))}
-- Generated PBIT: {self.project_name}.pbit
-- Generated PBIP: {self.project_name}.pbip
-
-## 1. Executive Discrepancy Audit Scorecard
-- SLA Verification: PASSED (< 5% Discrepancy)
-- PII Risk: None Detected
-- Output Path: {self.output_dir}
-=============================================================================
-"""
         with open(self.output_dir / "MIGRATION_AUDIT_REPORT.md", "w", encoding="utf-8") as f:
-            f.write(audit_md)
-        print("  [OK] Saved: MIGRATION_AUDIT_REPORT.md (Compliance Audit Log)")
+            f.write(self._build_audit_report())
+        print("  [OK] Saved: MIGRATION_AUDIT_REPORT.md")
+
+    def _build_audit_report(self) -> str:
+        """
+        Report what the migration actually produced.
+
+        Every number here is measured from the generated model. Nothing is
+        asserted that was not checked.
+        """
+        status = self.model_gen.table_status
+        tables = self.model_gen.script_tables
+        fields = self.data.get("data_model", {}).get("fields", [])
+        sheets = self.data.get("sheets", [])
+        charts = sum(len(s.get("charts", [])) for s in sheets)
+
+        connected = [n for n, s in status.items() if s["status"] == "connected"]
+        schema_only = [n for n, s in status.items() if s["status"] == "schema-only"]
+        total_columns = sum(s["columns"] for s in status.values())
+        typed_columns = sum(s["typed_columns"] for s in status.values())
+        all_dropped = [
+            (name, d) for name, s in status.items() for d in s["dropped"]
+        ]
+        unresolved = self.ai.unresolved
+
+        lines = [
+            f"# Qlik to Power BI Migration Report: {self.project_name}",
+            "",
+            f"- Source app: `{self.data.get('file', {}).get('name', self.project_name)}`",
+            f"- Output: `{self.output_dir}`",
+            f"- Generated: {self.project_name}.pbip, {self.project_name}.pbit",
+            "",
+            "## Summary",
+            "",
+            "| Item | Count |",
+            "| --- | --- |",
+            f"| Tables discovered in load script | {len(tables)} |",
+            f"| Tables wired to their real source | {len(connected)} |",
+            f"| Tables emitted schema-only (empty) | {len(schema_only)} |",
+            f"| Columns in generated model | {total_columns} |",
+            f"| Columns with a non-text type | {typed_columns} |",
+            f"| Fields in .qvf data model | {len(fields)} |",
+            f"| Qlik sheets | {len(sheets)} |",
+            f"| Qlik charts | {charts} |",
+            f"| Expressions needing manual review | {len(unresolved)} |",
+            f"| Script-computed fields not carried over | {len(all_dropped)} |",
+            "",
+        ]
+
+        if schema_only:
+            lines += [
+                "## Tables that contain no data",
+                "",
+                "These tables have the correct schema but zero rows, because their",
+                "source could not be reached from Power Query. Charts bound to them",
+                "will render empty until the source is repointed. No placeholder",
+                "rows were generated.",
+                "",
+                "| Table | Source type | Original path |",
+                "| --- | --- | --- |",
+            ]
+            for name in schema_only:
+                s = status[name]
+                lines.append(f"| {name} | {s['kind']} | `{s['path']}` |")
+            lines.append("")
+
+        if connected:
+            lines += [
+                "## Tables wired to a live source",
+                "",
+                "Set the `DataSourceRoot` parameter in Power BI to the folder holding",
+                "these files, then refresh.",
+                "",
+                "| Table | Source type | Path |",
+                "| --- | --- | --- |",
+            ]
+            for name in connected:
+                s = status[name]
+                lines.append(f"| {name} | {s['kind']} | `{s['path']}` |")
+            lines.append("")
+
+        if all_dropped:
+            lines += [
+                "## Script-computed fields not carried over",
+                "",
+                "These fields were built by load-script expressions rather than read",
+                "from a file. Power Query cannot derive them automatically. Some may",
+                "be join keys, in which case a relationship is missing too.",
+                "",
+                "| Table | Field | Qlik expression |",
+                "| --- | --- | --- |",
+            ]
+            for table_name, d in all_dropped:
+                expr = d["expression"].replace("\n", " ").replace("|", "\\|")[:90]
+                lines.append(f"| {table_name} | {d['name']} | `{expr}` |")
+            lines.append("")
+
+        if unresolved:
+            lines += [
+                "## Expressions needing manual review",
+                "",
+                "No confident DAX translation was found. Each was written into the",
+                "model as a `BLANK()` measure named `[Needs Review] ...` with the",
+                "original Qlik text in a comment, so nothing silently returns a",
+                "wrong number.",
+                "",
+                "| Table | Qlik expression |",
+                "| --- | --- |",
+            ]
+            for u in unresolved:
+                expr = u["expression"].replace("\n", " ").replace("|", "\\|")[:90]
+                lines.append(f"| {u['table']} | `{expr}` |")
+            lines.append("")
+
+        if fields and typed_columns == 0:
+            lines += [
+                "## Note on column types",
+                "",
+                "This .qvf carries no field type metadata (older Qlik versions omit",
+                "it), so every column was typed as text rather than guessed at.",
+                "Set numeric and date types in Power Query before building measures.",
+                "",
+            ]
+
+        lines += [
+            "## How to open",
+            "",
+            "1. Unzip the generated archive.",
+            f"2. Open `{self.project_name}.pbip` in Power BI Desktop.",
+            "3. Set the `DataSourceRoot` parameter to your exported data folder.",
+            "4. Refresh.",
+            "",
+        ]
+
+        return "\n".join(lines)
 
     def _build_legacy_vc(self, chart: dict, x: int, y: int, width: int, height: int, tab_order: int) -> dict:
         qlik_type = chart.get("type", "").lower()

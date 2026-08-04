@@ -1,13 +1,35 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Qlik → Fabric | Autonomous Migration Platform</title>
+    <meta name="color-scheme" content="light dark">
+
+    <!--
+      Resolve the theme before the stylesheet paints. This runs inline and
+      render-blocking on purpose: doing it in script.js (which runs after the
+      document parses) would show a flash of the wrong theme on every load.
+    -->
+    <script>
+        (function () {
+            try {
+                var stored = localStorage.getItem("qlikfab-theme");
+                var theme = (stored === "light" || stored === "dark")
+                    ? stored
+                    : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+                document.documentElement.setAttribute("data-theme", theme);
+            } catch (e) {
+                document.documentElement.setAttribute("data-theme", "light");
+            }
+        })();
+    </script>
+
     <link rel="stylesheet" href="styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
@@ -49,6 +71,17 @@
                     <p>Autonomous migration platform</p>
                 </div>
                 <div class="header-actions">
+                    <div class="theme-toggle" role="group" aria-label="Colour theme">
+                        <span class="theme-toggle__thumb" aria-hidden="true"></span>
+                        <button type="button" class="theme-toggle__option" data-theme-value="light"
+                                aria-pressed="true">
+                            <i class="fa-solid fa-sun" aria-hidden="true"></i> Light
+                        </button>
+                        <button type="button" class="theme-toggle__option" data-theme-value="dark"
+                                aria-pressed="false">
+                            <i class="fa-solid fa-moon" aria-hidden="true"></i> Dark
+                        </button>
+                    </div>
                     <button class="btn-deploy"><i class="fa-solid fa-cloud-arrow-up"></i> Deploy</button>
                 </div>
             </header>

@@ -6,6 +6,65 @@
 
 document.addEventListener("DOMContentLoaded", () => {
     // ----------------------------------------------------------------------
+    // 0. THEME TOGGLE (light / dark)
+    // ----------------------------------------------------------------------
+    // The initial theme is resolved by an inline script in index.html so the
+    // first paint is already correct; this block only handles user switching
+    // and keeping the control in sync.
+    const THEME_STORAGE_KEY = "qlikfab-theme";
+
+    function readStoredTheme() {
+        try {
+            const stored = localStorage.getItem(THEME_STORAGE_KEY);
+            return stored === "light" || stored === "dark" ? stored : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function applyTheme(theme, persist) {
+        document.documentElement.setAttribute("data-theme", theme);
+
+        document.querySelectorAll(".theme-toggle__option").forEach(btn => {
+            btn.setAttribute(
+                "aria-pressed",
+                btn.getAttribute("data-theme-value") === theme ? "true" : "false"
+            );
+        });
+
+        if (persist) {
+            try {
+                localStorage.setItem(THEME_STORAGE_KEY, theme);
+            } catch (e) {
+                /* Storage unavailable (private mode); theme still applies for this session. */
+            }
+        }
+    }
+
+    applyTheme(document.documentElement.getAttribute("data-theme") || "light", false);
+
+    document.querySelectorAll(".theme-toggle__option").forEach(btn => {
+        btn.addEventListener("click", () => {
+            applyTheme(btn.getAttribute("data-theme-value"), true);
+        });
+    });
+
+    // Follow the OS preference until the user makes an explicit choice.
+    if (window.matchMedia) {
+        const osPreference = window.matchMedia("(prefers-color-scheme: dark)");
+        const onOsChange = (e) => {
+            if (!readStoredTheme()) {
+                applyTheme(e.matches ? "dark" : "light", false);
+            }
+        };
+        if (osPreference.addEventListener) {
+            osPreference.addEventListener("change", onOsChange);
+        } else if (osPreference.addListener) {
+            osPreference.addListener(onOsChange);
+        }
+    }
+
+    // ----------------------------------------------------------------------
     // 1. DYNAMIC QVF APP REGISTRY
     // ----------------------------------------------------------------------
     const APP_REGISTRY = {
