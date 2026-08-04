@@ -764,7 +764,11 @@ class UniversalPBIPGenerator:
         self._write_json(self.report_dir / "definition.pbir", pbir)
 
     def _write_definition_pbism(self):
-        self._write_json(self.model_dir / "definition.pbism", {"version": "1.0", "settings": {}})
+        self._write_json(self.model_dir / "definition.pbism", {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/dataset/definition/datasetProperties/1.0.0/schema.json",
+            "version": "1.0",
+            "settings": {}
+        })
 
     def _write_model_bim(self):
         self._write_json(self.model_dir / "model.bim", self.model_gen.generate())
@@ -937,6 +941,8 @@ class UniversalPBIPGenerator:
         }
 
         # Standalone .pbit file packaging uses universal_layout as /Report/Layout
+        # We must also write it to the .Report root so the .pbip folder opens without Preview Features!
+        self._write_json(self.report_dir / "report.json", universal_layout)
 
         # 2. Package standalone .pbit file
         pbit_path = self.output_dir / f"{self.project_name}.pbit"
@@ -1144,8 +1150,8 @@ b'</Types>'
             meas_name, _ = self.ai.translate_expression_to_dax(meass[0]["expression"], table_name, cols_list)
 
         vis_id = f"visual_{new_guid().replace('-', '')[:16]}"
-        col_ref = f"{table_name}.{col_name}"
-        meas_ref = f"{table_name}.{meas_name}"
+        col_ref = f"'{table_name}'.{col_name}"
+        meas_ref = f"'{table_name}'.{meas_name}"
 
         projections = {}
         select_list = []

@@ -112,17 +112,37 @@
                         </button>
                     </div>
 
-                    <!-- RIGHT COLUMN: NEEDS TENANT URL & API KEY -->
-                    <div class="migration-card secondary-card">
-                        <h2>Needs a tenant URL and API key — see Settings.</h2>
+                    <div class="migration-card secondary-card" id="qlik-connection-card">
+                        <h2><i class="fa-solid fa-cloud"></i> Connect to Qlik Cloud</h2>
                         
                         <div class="form-group">
-                            <label>App ID or app URL</label>
-                            <input type="text" class="custom-input" placeholder="a1b2c3d4-e5f6-... or paste the app URL">
+                            <label>Tenant URL</label>
+                            <input type="text" id="qlik-tenant-url" class="custom-input" placeholder="https://your-tenant.region.qlikcloud.com">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>API Key (Bearer Token)</label>
+                            <input type="password" id="qlik-api-key" class="custom-input" placeholder="eyJhbGciOiJIUzI1...">
                         </div>
 
-                        <button id="btn-migrate-qlik" class="btn-secondary-block">
-                            Migrate from Qlik
+                        <div class="form-group">
+                            <label>Web Integration ID (Required for browser)</label>
+                            <input type="text" id="qlik-web-id" class="custom-input" placeholder="e.g. 5f8b9d3e-1a2b-4c3d...">
+                        </div>
+
+                        <button id="btn-test-connection" class="btn-secondary-block" style="margin-bottom: 15px;">
+                            Test Connection
+                        </button>
+
+                        <div id="qlik-apps-container" class="form-group" style="display: none;">
+                            <label>Select App to Migrate</label>
+                            <select id="qlik-app-select" class="custom-input">
+                                <option value="">Select an app...</option>
+                            </select>
+                        </div>
+
+                        <button id="btn-migrate-qlik" class="btn-secondary-block" style="display: none;">
+                            Migrate Selected App
                         </button>
                     </div>
                 </div>
