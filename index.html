@@ -107,24 +107,6 @@
                             <span class="remove-file" id="btn-browse-file" title="Browse & Upload up to 10 .QVF Files from your computer"><i class="fa-solid fa-folder-open"></i></span>
                         </div>
 
-                        <div class="form-group">
-                            <label>...or select a QVF application to migrate</label>
-                            <select id="bundled-select" class="custom-select">
-                                <option value="" selected>-- No file selected (Upload from folder or choose below) --</option>
-                                <option value="browse">📂 + Browse & Upload .QVF Files from your computer (up to 10)...</option>
-                                <option value="Executive Dashboard.qvf">Executive Dashboard.qvf (2.88 MB)</option>
-                                <option value="Helpdesk Management.qvf">Helpdesk Management.qvf (1.96 MB)</option>
-                                <option value="Superstore_Sales_Dashboard.qvf">Superstore_Sales_Dashboard.qvf (208.0 KB)</option>
-                                <option value="Demo 2.qvf">Demo 2.qvf (288.0 KB)</option>
-                                <option value="first_qlik_project.qvf">first_qlik_project.qvf (4.00 MB)</option>
-                            </select>
-                        </div>
-
-                        <div class="info-card-blue">
-                            <i class="fa-solid fa-circle-info"></i>
-                            <p>This file is read offline: script, sheets, charts, measures and the rows the app was last loaded with. Anything that cannot be read is reported, never guessed.</p>
-                        </div>
-
                         <button id="btn-start-migration" class="btn-primary-block">
                             Start migration
                         </button>
@@ -139,23 +121,9 @@
                             <input type="text" class="custom-input" placeholder="a1b2c3d4-e5f6-... or paste the app URL">
                         </div>
 
-                        <button class="btn-secondary-block">
+                        <button id="btn-migrate-qlik" class="btn-secondary-block">
                             Migrate from Qlik
                         </button>
-
-                        <div class="faq-accordion" id="faq-toggle">
-                            <div class="faq-header">
-                                <i class="fa-solid fa-chevron-right" id="faq-icon"></i>
-                                <span>Why is this better than uploading?</span>
-                            </div>
-                            <div class="faq-body" id="faq-content">
-                                <ul>
-                                    <li><b>Live Master Items Sync:</b> Read variables, custom security rules, and metadata directly from Qlik Cloud/Enterprise REST APIs.</li>
-                                    <li><b>Continuous Fabric Updates:</b> Keeps Power BI Fabric semantic models refreshed without manual `.qvf` file downloads.</li>
-                                    <li><b>Automatic Lineage Tracking:</b> Records source Qlik app lineage tags into Fabric `.pbip` datasets.</li>
-                                </ul>
-                            </div>
-                        </div>
                     </div>
                 </div>
 
@@ -169,7 +137,70 @@
                         <div class="console-title"><i class="fa-solid fa-robot"></i> Microsoft AutoGen 4-Phase Multi-Agent Execution</div>
                         <div class="console-status" id="console-status-badge"><span class="pulse-dot"></span> RUNNING</div>
                     </div>
-                    <div class="console-logs" id="console-logs-body"></div>
+                    <!-- 4 AUTONOMOUS AGENTS LIVE STREAMING DECK -->
+                    <div class="autogen-4agents-grid" id="autogen-4agents-grid">
+                        <!-- Agent 1: AssessmentAgent -->
+                        <div class="agent-live-box">
+                            <div class="agent-live-header">
+                                <div class="agent-live-identity">
+                                    <div class="agent-live-avatar" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fa-solid fa-user-shield"></i></div>
+                                    <div class="agent-live-names">
+                                        <h4>AssessmentAgent</h4>
+                                        <span>Phase 1: Pre-Migration & PII Audit</span>
+                                    </div>
+                                </div>
+                                <span class="agent-badge-tag" id="badge-agent-assess">IDLE</span>
+                            </div>
+                            <div class="agent-live-logs" id="logs-agent-assess"></div>
+                        </div>
+
+                        <!-- Agent 2: ReportParsingAgent -->
+                        <div class="agent-live-box">
+                            <div class="agent-live-header">
+                                <div class="agent-live-identity">
+                                    <div class="agent-live-avatar" style="background: linear-gradient(135deg, #06b6d4, #0891b2);"><i class="fa-solid fa-diagram-project"></i></div>
+                                    <div class="agent-live-names">
+                                        <h4>ReportParsingAgent</h4>
+                                        <span>Phase 2: QVF Volumetrics Parser</span>
+                                    </div>
+                                </div>
+                                <span class="agent-badge-tag" id="badge-agent-parse">IDLE</span>
+                            </div>
+                            <div class="agent-live-logs" id="logs-agent-parse"></div>
+                        </div>
+
+                        <!-- Agent 3: MappingAgent -->
+                        <div class="agent-live-box">
+                            <div class="agent-live-header">
+                                <div class="agent-live-identity">
+                                    <div class="agent-live-avatar" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);"><i class="fa-solid fa-brain"></i></div>
+                                    <div class="agent-live-names">
+                                        <h4>MappingAgent</h4>
+                                        <span>Phase 3: DAX & Visual Translator</span>
+                                    </div>
+                                </div>
+                                <span class="agent-badge-tag" id="badge-agent-map">IDLE</span>
+                            </div>
+                            <div class="agent-live-logs" id="logs-agent-map"></div>
+                        </div>
+
+                        <!-- Agent 4: ReportGenerationAgent -->
+                        <div class="agent-live-box">
+                            <div class="agent-live-header">
+                                <div class="agent-live-identity">
+                                    <div class="agent-live-avatar" style="background: linear-gradient(135deg, #10b981, #047857);"><i class="fa-solid fa-boxes-packing"></i></div>
+                                    <div class="agent-live-names">
+                                        <h4>ReportGenerationAgent</h4>
+                                        <span>Phase 4: Fabric PBIP Architect</span>
+                                    </div>
+                                </div>
+                                <span class="agent-badge-tag" id="badge-agent-gen">IDLE</span>
+                            </div>
+                            <div class="agent-live-logs" id="logs-agent-gen"></div>
+                        </div>
+                    </div>
+                    <!-- Hidden backwards compatibility log container -->
+                    <div class="console-logs hidden" id="console-logs-body"></div>
                     <div class="console-metrics hidden" id="console-metrics-row">
                         <div class="metric-card">
                             <span>Sheets Converted</span>
