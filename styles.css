@@ -447,29 +447,6 @@ html[data-theme="dark"] .theme-toggle__thumb {
     transform: translateX(86px);
 }
 
-.btn-deploy {
-    background: var(--accent-soft);
-    border: 1px solid var(--accent);
-    color: var(--accent);
-    padding: 9px 18px;
-    border-radius: var(--radius-pill);
-    font-family: inherit;
-    font-weight: 700;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.btn-deploy:hover {
-    background: var(--accent);
-    color: var(--text-on-accent);
-    box-shadow: var(--shadow-accent);
-    transform: translateY(-1px);
-}
-
 /* --------------------------------------------------------------------------
    5. ALERTS
    -------------------------------------------------------------------------- */
@@ -1122,6 +1099,10 @@ html[data-theme="dark"] .theme-toggle__thumb {
     color: var(--success) !important;
 }
 
+.warning-text {
+    color: var(--warning) !important;
+}
+
 /* --------------------------------------------------------------------------
    14. KPI + TABLES
    -------------------------------------------------------------------------- */
@@ -1387,4 +1368,413 @@ html[data-theme="dark"] .theme-toggle__thumb {
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
     }
+}
+
+/* ======================================================================
+   AGENT DETAIL TABS (one navigation entry per AutoGen agent)
+   ====================================================================== */
+
+/* Horizontal sub-tab strip inside the Artifacts pane. */
+/* Five long agent names do not fit on one row at every width, so the strip
+   stays a single row and scrolls sideways rather than wrapping into a block. */
+.subtab-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+    scrollbar-width: thin;
+}
+
+.subtab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    background: transparent;
+    color: var(--text-sub);
+    font-family: var(--font-main);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color var(--transition-fast),
+                color var(--transition-fast),
+                border-color var(--transition-fast);
+}
+
+.subtab:hover {
+    background-color: var(--bg-overlay);
+    color: var(--text-strong);
+}
+
+.subtab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    background-color: var(--accent-soft);
+}
+
+.subtab-pane {
+    display: none;
+    animation: fadeIn 0.3s ease;
+}
+
+.subtab-pane.active {
+    display: block;
+}
+
+.nav-agent-state {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-overlay-strong);
+    color: var(--text-muted);
+}
+
+.nav-agent-state.running {
+    background: var(--info-soft);
+    color: var(--info);
+}
+
+.nav-agent-state.completed {
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.agent-detail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    padding-bottom: 18px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+}
+
+.agent-detail-identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.agent-detail-avatar {
+    width: 46px;
+    height: 46px;
+    border-radius: var(--radius-md);
+    font-size: 20px;
+    flex-shrink: 0;
+}
+
+.agent-detail-identity h2 {
+    margin: 0;
+    font-size: 22px;
+    letter-spacing: -0.3px;
+}
+
+.agent-detail-role {
+    font-size: 13px;
+    color: var(--text-sub);
+    margin: 0;
+}
+
+.agent-detail-status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.agent-run-state {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.agent-kpi-row {
+    margin-bottom: 24px;
+}
+
+.agent-detail-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 20px;
+    align-items: start;
+}
+
+.agent-detail-main {
+    min-width: 0;
+}
+
+/* Long DAX / dimension lists must scroll inside the card, never widen the page. */
+.agent-detail-main .table-container {
+    overflow-x: auto;
+}
+
+/* Terminal panel keeps the dark treatment of the live streaming deck in both
+   themes, so a log line looks the same wherever it is read. */
+.agent-log-panel {
+    background: #0b0f19;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+    position: sticky;
+    top: 24px;
+    box-shadow: var(--shadow-md);
+}
+
+.agent-log-head {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: #9aa3b2;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.agent-log-head i {
+    margin-right: 6px;
+}
+
+.agent-detail-logs {
+    max-height: 460px;
+    overflow-y: auto;
+}
+
+.agent-log-empty {
+    font-size: 12px;
+    line-height: 1.7;
+    color: #6b7482;
+}
+
+.agent-log-empty b {
+    color: #9aa3b2;
+}
+
+/* Shown when nothing has been uploaded, so a tab explains its blank state
+   instead of implying the agent produced an empty result. */
+.agent-empty-state {
+    background-color: var(--bg-card);
+    border: 1px dashed var(--border-dashed);
+    border-radius: var(--radius-lg);
+    padding: 32px 28px;
+    text-align: center;
+    color: var(--text-sub);
+}
+
+.agent-empty-state i {
+    font-size: 26px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    display: block;
+}
+
+.agent-empty-state h3 {
+    font-size: 16px;
+    margin-bottom: 6px;
+}
+
+.agent-section-note {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: -6px;
+    margin-bottom: 16px;
+}
+
+.field-chip {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 3px 8px;
+    margin: 0 5px 5px 0;
+    border-radius: var(--radius-sm);
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    color: var(--text-body);
+}
+
+.field-chip.pii {
+    background: var(--warning-soft);
+    border-color: var(--warning);
+    color: var(--warning);
+}
+
+@media (max-width: 1200px) {
+    .agent-detail-grid { grid-template-columns: 1fr; }
+    .agent-log-panel { position: static; }
+    .agent-detail-logs { max-height: 260px; }
+}
+
+@media (max-width: 760px) {
+    .subtab { padding: 10px 12px; }
+}
+
+/* ======================================================================
+   SOURCE CHOOSER (first screen of Run migration)
+   ====================================================================== */
+.mode-chooser {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 8px 0 0;
+    text-align: center;
+}
+
+.mode-chooser h2 {
+    font-size: 24px;
+    letter-spacing: -0.4px;
+    margin-bottom: 6px;
+}
+
+.mode-chooser .tab-desc {
+    margin: 0 auto 28px;
+}
+
+.mode-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 22px;
+    text-align: left;
+}
+
+.mode-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 28px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    font-family: var(--font-main);
+    text-align: left;
+    cursor: pointer;
+    transition: var(--theme-transition),
+                transform var(--transition-base),
+                border-color var(--transition-fast),
+                box-shadow var(--transition-base);
+}
+
+.mode-card:hover,
+.mode-card:focus-visible {
+    border-color: var(--accent);
+    box-shadow: var(--shadow-md), var(--glow-accent);
+    transform: translateY(-3px);
+    outline: none;
+}
+
+.mode-icon {
+    width: 46px;
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-md);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 20px;
+}
+
+.mode-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-strong);
+}
+
+.mode-desc {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-sub);
+}
+
+.mode-go {
+    margin-top: 6px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent);
+}
+
+.mode-go i {
+    margin-left: 4px;
+    transition: transform var(--transition-fast);
+}
+
+.mode-card:hover .mode-go i {
+    transform: translateX(3px);
+}
+
+/* Bar shown in place of the chooser once a source is picked. */
+.mode-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+.mode-bar-label {
+    font-size: 13px;
+    color: var(--text-sub);
+}
+
+.mode-bar-label b {
+    color: var(--text-strong);
+}
+
+.btn-link {
+    background: none;
+    border: none;
+    padding: 6px 2px;
+    font-family: var(--font-main);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    cursor: pointer;
+}
+
+.btn-link:hover {
+    text-decoration: underline;
+}
+
+/* One path at a time, so the chosen card gets the full width. */
+.migration-grid.single {
+    grid-template-columns: minmax(0, 720px);
+    justify-content: center;
+}
+
+.form-section-title {
+    margin-top: 4px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--text-strong);
+}
+
+.form-section-title i {
+    color: var(--accent);
+    margin-right: 6px;
+}
+
+.form-hint {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+}
+
+@media (max-width: 760px) {
+    .mode-grid { grid-template-columns: 1fr; }
 }

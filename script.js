@@ -202,6 +202,452 @@ document.addEventListener("DOMContentLoaded", () => {
         return match ? parseInt(match[1], 10) : 0;
     }
 
+    function escapeHtml(value) {
+        return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
+    // ----------------------------------------------------------------------
+    // 1b. AGENT DETAIL TABS
+    //
+    // Each AutoGen agent gets its own navigation entry and pane. A pane only
+    // ever renders what the registry actually holds for the current upload —
+    // when nothing is uploaded it says so rather than showing zeroed metrics
+    // that would read as a real result.
+    // ----------------------------------------------------------------------
+
+    // Column names are matched against these patterns to flag possible PII. This
+    // is a NAME-pattern heuristic on the extracted schema, not an inspection of
+    // row values, and every screen that reports PII says so.
+    const PII_PATTERNS = [
+        { re: /e-?mail/i, category: "Email address" },
+        { re: /(phone|mobile|msisdn)/i, category: "Phone number" },
+        { re: /(ssn|social_?security|passport|national_?id|aadhaar|tax_?id)/i, category: "Government ID" },
+        { re: /(dob|date_?of_?birth|birth_?date|birthday)/i, category: "Date of birth" },
+        { re: /(iban|swift|card_?(no|num|number)|credit_?card|account_?(no|num|number))/i, category: "Financial account" },
+        { re: /(salary|income|compensation|payroll)/i, category: "Compensation" },
+        { re: /(gender|ethnic|religion|marital|disabilit)/i, category: "Sensitive attribute" },
+        { re: /(address|street|zip_?code|postal|pincode)/i, category: "Postal address" },
+        { re: /name/i, category: "Personal name" }
+    ];
+
+    function scanPiiColumns(app) {
+        const columns = (app && app.columns) || [];
+        const hits = [];
+        columns.forEach(col => {
+            const match = PII_PATTERNS.find(p => p.re.test(col));
+            if (match) hits.push({ column: col, category: match.category, file: app.filename });
+        });
+        return hits;
+    }
+
+    function scanPiiForApps(apps) {
+        return apps.reduce((acc, app) => acc.concat(scanPiiColumns(app)), []);
+    }
+
+    const AGENT_DEFS = [
+        { id: "assess", name: "AssessmentAgent", phase: "Phase 1" },
+        { id: "parse", name: "ReportParsingAgent", phase: "Phase 2" },
+        { id: "map", name: "MappingAgent", phase: "Phase 3" },
+        { id: "gen", name: "ReportGenerationAgent", phase: "Phase 4" }
+    ];
+
+    // Null until a run finishes. Drives the "planned scope" vs "produced by the
+    // last run" wording in every agent pane.
+    let lastRunSummary = null;
+
+    function kpiBox(label, value, sub, valueClass) {
+        return `
+            <div class="kpi-box">
+                <span class="kpi-label">${escapeHtml(label)}</span>
+                <b class="kpi-value ${valueClass || ""}">${escapeHtml(value)}</b>
+                <span class="kpi-sub">${escapeHtml(sub)}</span>
+            </div>`;
+    }
+
+    function agentEmptyState(agentName) {
+        return `
+            <div class="agent-empty-state">
+                <i class="fa-solid fa-inbox"></i>
+                <h3>No .qvf uploaded yet</h3>
+                <p>${escapeHtml(agentName)} has nothing to report until a Qlik app is loaded.
+                   Upload one or more <b>.qvf</b> files on the <b>Run migration</b> tab and this
+                   pane fills in with the parsed detail for that upload.</p>
+            </div>`;
+    }
+
+    // Totals shared by several panes. Apps whose sheet/chart counts were never
+    // recovered (live Qlik Cloud apps) are counted as unknown rather than as zero,
+    // so a total never understates by pretending a missing count is nothing.
+    function batchTotals(apps) {
+        const counted = apps.filter(a => !a.unknownVisuals);
+        return {
+            fields: apps.reduce((n, a) => n + leadingCount(a.fieldsCnt), 0),
+            sheets: counted.reduce((n, a) => n + leadingCount(a.visualsCnt.split("/")[0]), 0),
+            charts: counted.reduce((n, a) => n + leadingCount(a.visualsCnt.split("/")[1]), 0),
+            measures: apps.reduce((n, a) => n + a.daxQueue.length, 0),
+            unknown: apps.length - counted.length
+        };
+    }
+
+    // A count that only covers part of the batch is shown as a floor ("4+"), or as
+    // "—" when no app in the batch reported one at all.
+    function partialCount(value, totals) {
+        if (!totals.unknown) return String(value);
+        return value === 0 ? "—" : `${value}+`;
+    }
+
+    function partialNote(totals, base) {
+        return totals.unknown ? `${base} • unknown for ${totals.unknown} app(s)` : base;
+    }
+
+    function gapsFor(apps) {
+        return apps.reduce((acc, app) => acc.concat((app.gaps || []).map(g => ({ app: app.filename, gap: g }))), []);
+    }
+
+    function gapsCard(apps) {
+        const gaps = gapsFor(apps);
+        if (!gaps.length) return "";
+        return `
+            <div class="table-container">
+                <h3>Not recovered from the source</h3>
+                <p class="agent-section-note">These are gaps in what the source system handed over. They are listed rather than filled in, so nothing downstream reads as migrated when it was not.</p>
+                <table class="custom-table">
+                    <thead><tr><th>App</th><th>Missing</th></tr></thead>
+                    <tbody>${gaps.map(g => `
+                        <tr>
+                            <td>${escapeHtml(g.app)}</td>
+                            <td><span class="status-badge pending">${escapeHtml(g.gap)}</span></td>
+                        </tr>`).join("")}
+                    </tbody>
+                </table>
+            </div>`;
+    }
+
+    function renderAssessAgentTab(apps) {
+        const kpiHost = document.getElementById("kpi-agent-assess");
+        const bodyHost = document.getElementById("detail-body-assess");
+        if (!kpiHost || !bodyHost) return;
+
+        if (!apps.length) {
+            kpiHost.innerHTML = "";
+            bodyHost.innerHTML = agentEmptyState("AssessmentAgent");
+            return;
+        }
+
+        const totals = batchTotals(apps);
+        const pii = scanPiiForApps(apps);
+
+        kpiHost.innerHTML =
+            kpiBox("Apps in scope", `${apps.length} app(s)`, "Queued for this run") +
+            kpiBox("Extracted fields", `${totals.fields}`, "Across all queued apps") +
+            kpiBox(
+                "Sheets / charts",
+                `${partialCount(totals.sheets, totals)} / ${partialCount(totals.charts, totals)}`,
+                partialNote(totals, "Reported by the source")
+            ) +
+            kpiBox(
+                "PII name-pattern hits",
+                pii.length ? `${pii.length} flagged` : "None flagged",
+                pii.length ? "Review before publishing" : "No matching column names",
+                pii.length ? "warning-text" : "success-text"
+            );
+
+        const fileRows = apps.map(app => {
+            const appPii = scanPiiColumns(app);
+            return `
+                <tr>
+                    <td><b>${escapeHtml(app.filename)}</b></td>
+                    <td>${escapeHtml(app.size)}</td>
+                    <td>${escapeHtml(app.fieldsCnt)}</td>
+                    <td>${escapeHtml(app.visualsCnt)}</td>
+                    <td>${appPii.length
+                        ? `<span class="status-badge pending">${appPii.length} flagged</span>`
+                        : `<span class="status-badge success">None flagged</span>`}</td>
+                </tr>`;
+        }).join("");
+
+        const piiRows = pii.length
+            ? pii.map(hit => `
+                <tr>
+                    <td><code>${escapeHtml(hit.column)}</code></td>
+                    <td>${escapeHtml(hit.file)}</td>
+                    <td><span class="status-badge pending">${escapeHtml(hit.category)}</span></td>
+                </tr>`).join("")
+            : `<tr><td colspan="3">No column name in the extracted schema matched a PII pattern.</td></tr>`;
+
+        bodyHost.innerHTML = `
+            <div class="table-container">
+                <h3>Pre-migration scan per app</h3>
+                <p class="agent-section-note">Volumetrics as reported by each queued source — an uploaded .qvf load script, or the Qlik Cloud REST data model.</p>
+                <table class="custom-table">
+                    <thead>
+                        <tr><th>Source app</th><th>Size</th><th>Fields</th><th>Sheets / charts</th><th>PII scan</th></tr>
+                    </thead>
+                    <tbody>${fileRows}</tbody>
+                </table>
+            </div>
+            <div class="table-container">
+                <h3>PII name-pattern findings</h3>
+                <p class="agent-section-note">
+                    Heuristic on <b>column names only</b> — row values are never inspected, so this
+                    is a review prompt, not a certification that the data is or is not personal.
+                </p>
+                <table class="custom-table">
+                    <thead><tr><th>Column</th><th>Source app</th><th>Pattern matched</th></tr></thead>
+                    <tbody>${piiRows}</tbody>
+                </table>
+            </div>
+            ${gapsCard(apps)}`;
+    }
+
+    function renderParseAgentTab(apps) {
+        const kpiHost = document.getElementById("kpi-agent-parse");
+        const bodyHost = document.getElementById("detail-body-parse");
+        if (!kpiHost || !bodyHost) return;
+
+        if (!apps.length) {
+            kpiHost.innerHTML = "";
+            bodyHost.innerHTML = agentEmptyState("ReportParsingAgent");
+            return;
+        }
+
+        const totals = batchTotals(apps);
+        const resolved = apps.reduce((n, a) => n + (a.columns ? a.columns.length : 0), 0);
+
+        // The recovered-name count and the schema header count come from two
+        // different reads and can disagree, so they are reported side by side
+        // rather than as a single "x of y" that would imply one contains the other.
+        kpiHost.innerHTML =
+            kpiBox("Apps parsed", `${apps.length}`, "Data model read from source") +
+            kpiBox("Sheets", partialCount(totals.sheets, totals), partialNote(totals, "Become Power BI pages")) +
+            kpiBox("Charts", partialCount(totals.charts, totals), partialNote(totals, "Visual objects inventoried")) +
+            kpiBox("Field names recovered", `${resolved}`, `Schema header reports ${totals.fields}`);
+
+        const sheetRows = apps.map(app => app.sheets.map(sh => `
+            <tr>
+                <td>${escapeHtml(app.name)}</td>
+                <td><b>${escapeHtml(sh.name)}</b></td>
+                <td>${escapeHtml(sh.chartType)}</td>
+                <td>${escapeHtml(sh.title)}</td>
+                <td><code>${escapeHtml(sh.dims)}</code></td>
+                <td><code>${escapeHtml(sh.meas)}</code></td>
+            </tr>`).join("")).join("");
+
+        const schemaBlocks = apps.map(app => {
+            const cols = app.columns || [];
+            const chips = cols.length
+                ? cols.map(c => {
+                    const hit = PII_PATTERNS.find(p => p.re.test(c));
+                    return `<span class="field-chip${hit ? " pii" : ""}" title="${hit ? escapeHtml(hit.category) : "No PII pattern match"}">${escapeHtml(c)}</span>`;
+                }).join("")
+                : `<span class="field-chip">No field names resolved</span>`;
+            return `
+                <div style="margin-bottom: 18px;">
+                    <b>${escapeHtml(app.filename)}</b>
+                    <p class="agent-section-note">${app.source === "qlik-cloud"
+                        ? `${cols.length} field(s) returned by the Qlik Cloud data model endpoint${app.tablesCnt ? ` across ${app.tablesCnt} table(s)` : ""}.`
+                        : `${cols.length} field name(s) recovered from the load script; the schema header reports ${escapeHtml(app.fieldsCnt)}. The two counts come from separate reads and are not guaranteed to match.`}</p>
+                    <div>${chips}</div>
+                </div>`;
+        }).join("");
+
+        bodyHost.innerHTML = `
+            <div class="table-container">
+                <h3>Sheet &amp; chart inventory</h3>
+                <p class="agent-section-note">Every sheet found in the queued apps, with the dimensions and measures each visual binds to.</p>
+                <table class="custom-table">
+                    <thead>
+                        <tr><th>App</th><th>Sheet</th><th>Chart type</th><th>Visual title</th><th>Dimensions</th><th>Measures</th></tr>
+                    </thead>
+                    <tbody>${sheetRows || `<tr><td colspan="6">No sheet or chart inventory was returned for the queued app(s). See the gaps listed on the AssessmentAgent tab.</td></tr>`}</tbody>
+                </table>
+            </div>
+            <div class="table-container">
+                <h3>Resolved schema fields</h3>
+                <p class="agent-section-note">Highlighted chips matched a PII name pattern raised by <code>AssessmentAgent</code>.</p>
+                ${schemaBlocks}
+            </div>`;
+    }
+
+    function renderMapAgentTab(apps) {
+        const kpiHost = document.getElementById("kpi-agent-map");
+        const bodyHost = document.getElementById("detail-body-map");
+        if (!kpiHost || !bodyHost) return;
+
+        if (!apps.length) {
+            kpiHost.innerHTML = "";
+            bodyHost.innerHTML = agentEmptyState("MappingAgent");
+            return;
+        }
+
+        const queue = apps.reduce((acc, app) => acc.concat(app.daxQueue.map(dq => ({ app, dq }))), []);
+        const autoApproved = queue.filter(q => q.dq.status === "Auto-Approved").length;
+        const needsReview = queue.length - autoApproved;
+        const confidences = queue.map(q => parseFloat(q.dq.conf)).filter(n => !isNaN(n));
+        const avgConf = confidences.length
+            ? (confidences.reduce((a, b) => a + b, 0) / confidences.length).toFixed(1) + "%"
+            : "n/a";
+
+        kpiHost.innerHTML =
+            kpiBox("Expressions translated", `${queue.length}`, "Qlik → DAX measures") +
+            kpiBox("Auto-approved", `${autoApproved}`, "Above the confidence bar", "success-text") +
+            kpiBox("Needs review", `${needsReview}`, needsReview ? "Open the Review queue" : "Nothing held back", needsReview ? "warning-text" : "success-text") +
+            kpiBox("Mean confidence", avgConf, "Across translated measures");
+
+        const rows = queue.map(({ app, dq }) => `
+            <tr>
+                <td>${escapeHtml(app.name)}</td>
+                <td><code>${escapeHtml(dq.expr)}</code></td>
+                <td><code class="dax-code">${escapeHtml(dq.dax)}</code></td>
+                <td><span class="conf-pill">${escapeHtml(dq.conf)}</span></td>
+                <td><span class="status-badge ${dq.status === "Auto-Approved" ? "success" : "pending"}">${escapeHtml(dq.status)}</span></td>
+            </tr>`).join("");
+
+        bodyHost.innerHTML = `
+            <div class="table-container">
+                <h3>DAX translation queue</h3>
+                <p class="agent-section-note">Every Qlik expression this agent rewrote, with the confidence the translation carried. Edits are made on the <b>Review queue</b> tab.</p>
+                <table class="custom-table">
+                    <thead>
+                        <tr><th>App</th><th>Qlik expression</th><th>Translated DAX</th><th>Confidence</th><th>Status</th></tr>
+                    </thead>
+                    <tbody>${rows || `<tr><td colspan="5">No Qlik expressions were retrieved for the queued app(s), so nothing was translated.</td></tr>`}</tbody>
+                </table>
+            </div>`;
+    }
+
+    function renderGenAgentTab(apps) {
+        const kpiHost = document.getElementById("kpi-agent-gen");
+        const bodyHost = document.getElementById("detail-body-gen");
+        if (!kpiHost || !bodyHost) return;
+
+        if (!apps.length) {
+            kpiHost.innerHTML = "";
+            bodyHost.innerHTML = agentEmptyState("ReportGenerationAgent");
+            return;
+        }
+
+        const totals = batchTotals(apps);
+        const built = !!lastRunSummary;
+
+        kpiHost.innerHTML =
+            kpiBox(built ? "Projects built" : "Projects to build", `${apps.length}`, "One PBIP project per app") +
+            kpiBox("Report pages", partialCount(totals.sheets, totals), partialNote(totals, "One per Qlik sheet")) +
+            kpiBox("Visuals on canvas", partialCount(totals.charts, totals), partialNote(totals, "Mapped from Qlik charts")) +
+            kpiBox("Measures embedded", `${totals.measures}`, "From MappingAgent");
+
+        const rows = apps.map(app => `
+            <tr>
+                <td><b>${escapeHtml(app.filename)}</b></td>
+                <td><code>${escapeHtml(app.projectDir)}</code></td>
+                <td>${escapeHtml(app.pbipName)}</td>
+                <td>${escapeHtml(app.pbitName)}</td>
+                <td>${escapeHtml(app.pbitSize)}</td>
+                <td><span class="status-badge ${built ? "success" : "pending"}">${built ? "Generated" : "Pending run"}</span></td>
+            </tr>`).join("");
+
+        // Only the live path collects a destination; it is where the output is meant
+        // to land, not somewhere this client has written to.
+        const targeted = apps.filter(a => a.fabricTarget);
+        const destinationCard = targeted.length ? `
+            <div class="table-container">
+                <h3>Microsoft Fabric destination</h3>
+                <p class="agent-section-note">Recorded with the run and written into the audit report. The files below are generated for you to download — this client does not publish to the workspace.</p>
+                <table class="custom-table">
+                    <thead><tr><th>App</th><th>Workspace</th><th>Capacity</th><th>Item name prefix</th></tr></thead>
+                    <tbody>${targeted.map(a => `
+                        <tr>
+                            <td>${escapeHtml(a.name)}</td>
+                            <td><b>${escapeHtml(a.fabricTarget.workspace)}</b></td>
+                            <td>${a.fabricTarget.capacity ? escapeHtml(a.fabricTarget.capacity) : "<span class=\"kpi-sub\">workspace default</span>"}</td>
+                            <td>${a.fabricTarget.prefix ? escapeHtml(a.fabricTarget.prefix) : "<span class=\"kpi-sub\">app name</span>"}</td>
+                        </tr>`).join("")}
+                    </tbody>
+                </table>
+            </div>` : "";
+
+        bodyHost.innerHTML = `
+            ${destinationCard}
+            <div class="table-container">
+                <h3>Build output per app</h3>
+                <p class="agent-section-note">
+                    ${built
+                        ? "Produced by the last completed run. Downloads live on the Artifacts tab."
+                        : "Planned output for the current upload. Nothing is written until a migration run completes."}
+                </p>
+                <table class="custom-table">
+                    <thead>
+                        <tr><th>Source app</th><th>Project folder</th><th>.pbip</th><th>.pbit</th><th>Template size</th><th>Status</th></tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+                <div class="action-bar">
+                    <button class="btn-primary-block" id="btn-agent-goto-artifacts" style="width: auto; padding: 12px 28px;">
+                        <i class="fa-solid fa-box-open"></i> Open Artifacts tab
+                    </button>
+                </div>
+            </div>`;
+
+        const gotoBtn = document.getElementById("btn-agent-goto-artifacts");
+        if (gotoBtn) gotoBtn.addEventListener("click", () => switchSubTab("sub-downloads"));
+    }
+
+    // The download cards describe files a run produced, so they stay hidden until
+    // a run has actually produced them.
+    function updateArtifactsAvailability() {
+        const grid = document.getElementById("artifacts-grid");
+        const empty = document.getElementById("artifacts-empty-state");
+        const built = !!lastRunSummary;
+        if (grid) grid.classList.toggle("hidden", !built);
+        if (empty) empty.classList.toggle("hidden", built);
+    }
+
+    // Writes the shared status chrome (sidebar pill, pane badge, run-state line)
+    // for one agent.
+    function setAgentStatus(id, label, styleClass) {
+        const badge = document.getElementById(`badge-agent-${id}`);
+        if (badge) {
+            badge.textContent = label;
+            badge.className = `agent-badge-tag ${styleClass}`;
+        }
+        const detailBadge = document.getElementById(`badge-detail-${id}`);
+        if (detailBadge) {
+            detailBadge.textContent = label;
+            detailBadge.className = `agent-badge-tag ${styleClass}`;
+        }
+        const navPill = document.getElementById(`nav-state-${id}`);
+        if (navPill) {
+            navPill.textContent = styleClass === "completed" ? "done" : (styleClass === "running" ? "live" : "idle");
+            navPill.className = `nav-agent-state ${styleClass}`;
+        }
+    }
+
+    function setAgentRunState(id, text) {
+        const el = document.getElementById(`runstate-${id}`);
+        if (el) el.textContent = text;
+    }
+
+    function renderAgentDetailTabs() {
+        const apps = getBatchApps();
+        updateArtifactsAvailability();
+        renderAssessAgentTab(apps);
+        renderParseAgentTab(apps);
+        renderMapAgentTab(apps);
+        renderGenAgentTab(apps);
+
+        AGENT_DEFS.forEach(agent => {
+            if (lastRunSummary) {
+                setAgentRunState(agent.id, `Last run ${lastRunSummary.at} • ${lastRunSummary.count} app(s)`);
+            } else {
+                setAgentRunState(agent.id, apps.length ? `${apps.length} app(s) queued • not run yet` : "Not run yet");
+            }
+        });
+    }
+
     // ----------------------------------------------------------------------
     // 2. SIDEBAR NAVIGATION
     // ----------------------------------------------------------------------
@@ -229,11 +675,78 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
-    const linkToSettings = document.getElementById("link-to-settings");
-    if (linkToSettings) {
-        linkToSettings.addEventListener("click", (e) => {
-            e.preventDefault();
-            switchTab("tab-settings");
+    // Horizontal sub-tabs inside Artifacts: downloads plus one pane per agent.
+    const subTabs = document.querySelectorAll(".subtab-bar .subtab");
+    const subPanes = document.querySelectorAll(".subtab-pane");
+
+    function switchSubTab(paneId) {
+        subTabs.forEach(t => {
+            const on = t.getAttribute("data-subtab") === paneId;
+            t.classList.toggle("active", on);
+            t.setAttribute("aria-selected", on ? "true" : "false");
+        });
+        subPanes.forEach(p => p.classList.toggle("active", p.id === paneId));
+    }
+
+    subTabs.forEach(tab => {
+        tab.addEventListener("click", () => switchSubTab(tab.getAttribute("data-subtab")));
+    });
+
+    // ----------------------------------------------------------------------
+    // 2b. SOURCE CHOOSER
+    // The Run migration tab opens on a choice of source; only the chosen path is
+    // rendered afterwards, so an upload and a live connection are never both
+    // half-configured at the same time.
+    // ----------------------------------------------------------------------
+    const MODE_META = {
+        file: {
+            name: "Upload files — no Qlik connection",
+            caption: "Upload any .QVF file or .ZIP archive. The files are read in your browser and never sent anywhere."
+        },
+        qlik: {
+            name: "Live Qlik Cloud connection",
+            caption: "Connect to your tenant, pick an app, then set the Microsoft Fabric destination for the run."
+        }
+    };
+
+    let activeMode = null;
+
+    function applyMode(mode) {
+        activeMode = mode;
+        const chooser = document.getElementById("mode-chooser");
+        const bar = document.getElementById("mode-bar");
+        const grid = document.getElementById("migration-grid");
+        const caption = document.getElementById("mode-footer-caption");
+        const barName = document.getElementById("mode-bar-name");
+        const filePane = document.getElementById("mode-pane-file");
+        const qlikPane = document.getElementById("mode-pane-qlik");
+
+        const chosen = !!mode;
+        if (chooser) chooser.classList.toggle("hidden", chosen);
+        if (bar) bar.classList.toggle("hidden", !chosen);
+        if (grid) grid.classList.toggle("hidden", !chosen);
+        if (caption) caption.classList.toggle("hidden", !chosen);
+        if (filePane) filePane.classList.toggle("hidden", mode !== "file");
+        if (qlikPane) qlikPane.classList.toggle("hidden", mode !== "qlik");
+        if (chosen) {
+            if (barName) barName.textContent = MODE_META[mode].name;
+            if (caption) caption.textContent = MODE_META[mode].caption;
+        }
+    }
+
+    document.querySelectorAll(".mode-card").forEach(card => {
+        card.addEventListener("click", () => applyMode(card.getAttribute("data-mode")));
+    });
+
+    const btnChangeMode = document.getElementById("btn-change-mode");
+    if (btnChangeMode) {
+        btnChangeMode.addEventListener("click", () => {
+            // Switching source drops whatever the previous source had loaded, so the
+            // other path can never run against it.
+            refreshAllTabsForActiveQvf(null);
+            const consoleCard = document.getElementById("autogen-console");
+            if (consoleCard) consoleCard.classList.add("hidden");
+            applyMode(null);
         });
     }
 
@@ -1192,15 +1705,38 @@ ${apps.map(buildAuditReport).join("\n\n")}
 - Generated PBIP: ${appData.pbipName}
 
 ## 1. Sheets & Visuals Inventory
-${appData.sheets.map(sh => `- Sheet: "${sh.name}" | Type: ${sh.chartType} | Title: ${sh.title} | Status: ${sh.status}`).join("\n")}
+${appData.sheets.length
+    ? appData.sheets.map(sh => `- Sheet: "${sh.name}" | Type: ${sh.chartType} | Title: ${sh.title} | Status: ${sh.status}`).join("\n")
+    : "- None returned by the source. See section 4."}
 
 ## 2. DAX Expression Queue
-${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: ${dq.conf})`).join("\n")}
+${appData.daxQueue.length
+    ? appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: ${dq.conf})`).join("\n")
+    : "- No Qlik expressions were retrieved, so none were translated. See section 4."}
 
 ## 3. Executive Discrepancy Audit Scorecard
-- SLA Verification: PASSED (< 5% Discrepancy)
-- PII Risk: None Detected
+- SLA Verification: not computed — no source/target value comparison was run
+- PII Risk: ${(() => {
+        const hits = scanPiiColumns(appData);
+        return hits.length
+            ? `${hits.length} column name(s) matched a PII pattern: ${hits.map(h => h.column).join(", ")} (name-pattern scan; row values not inspected)`
+            : "No column name matched a PII pattern (name-pattern scan; row values not inspected)";
+    })()}
 - Output Path: ${appData.projectDir}
+
+## 4. Intended Destination
+${appData.fabricTarget
+    ? `- Microsoft Fabric workspace: ${appData.fabricTarget.workspace}
+- Capacity: ${appData.fabricTarget.capacity || "workspace default"}
+- Item name prefix: ${appData.fabricTarget.prefix || appData.name}
+- NOT PUBLISHED: the artifacts were generated for download. Nothing was written to this workspace by the migration client.`
+    : "- None recorded. The artifacts were generated for local download only."}
+
+## 5. Gaps — not recovered from the source
+${(appData.gaps && appData.gaps.length)
+    ? appData.gaps.map(g => `- ${g}`).join("\n")
+    : "- None. Every section above came from the source app."}
+=============================================================================
 =============================================================================
 `;
     }
@@ -1215,6 +1751,17 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         migrationBatch = (batchKeys && batchKeys.length)
             ? batchKeys.filter(k => APP_REGISTRY[k])
             : (appData ? [appData.filename] : []);
+
+        // A different upload means the previous run's agent output no longer
+        // describes what is loaded, so the agent tabs go back to idle.
+        lastRunSummary = null;
+        AGENT_DEFS.forEach(agent => {
+            setAgentStatus(agent.id, "IDLE", "");
+            const detailBox = document.getElementById(`logs-detail-${agent.id}`);
+            if (detailBox) detailBox.innerHTML = "";
+            const detailEmpty = document.getElementById(`logs-empty-${agent.id}`);
+            if (detailEmpty) detailEmpty.classList.remove("hidden");
+        });
 
         // Reset Start Migration buttons so they only appear when a file is loaded, and never stay stuck on green "Migration Completed"
         const b1 = document.getElementById("btn-start-migration");
@@ -1232,8 +1779,9 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
             b2.classList.remove("running-btn", "success-btn");
             b2.style.background = "";
             b2.style.color = "";
-            b2.innerHTML = "Migrate from Qlik";
-            b2.style.display = "block";
+            b2.innerHTML = "Migrate Selected App";
+            // Stays hidden until Test Connection has actually listed the tenant's apps.
+            b2.style.display = qlikConnection ? "block" : "none";
         }
 
         const dzName = document.getElementById("dropzone-name");
@@ -1241,10 +1789,18 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         if (!appData) {
             if (dzName) dzName.textContent = "No file uploaded (Upload from folder or choose below)";
             if (dzSize) dzSize.textContent = "0 KB";
+            renderAgentDetailTabs();
             return;
         }
-        if (dzName) dzName.textContent = appData.filename;
-        if (dzSize) dzSize.textContent = appData.size;
+        // A live Qlik Cloud app was never uploaded, so the upload box must not
+        // start claiming it holds a file.
+        if (appData.source === "qlik-cloud") {
+            if (dzName) dzName.textContent = "No file uploaded — active app is live from Qlik Cloud";
+            if (dzSize) dzSize.textContent = "0 KB";
+        } else {
+            if (dzName) dzName.textContent = appData.filename;
+            if (dzSize) dzSize.textContent = appData.size;
+        }
 
         // B. Assessment Tab Titles & KPIs
         const assessName = document.getElementById("assess-target-name");
@@ -1259,6 +1815,30 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         const kpiVisuals = document.getElementById("kpi-visuals-cnt");
         if (kpiVisuals) kpiVisuals.textContent = appData.visualsCnt;
 
+        const kpiVisualsSub = document.getElementById("kpi-visuals-sub");
+        if (kpiVisualsSub) {
+            kpiVisualsSub.textContent = appData.source === "qlik-cloud"
+                ? "App objects need a QIX engine session"
+                : "Parsed from Load Script";
+        }
+
+        // PII is reported from the same column-name scan the AssessmentAgent tab
+        // uses, so the two screens can never disagree.
+        const activePii = scanPiiColumns(appData);
+        const kpiPiiValue = document.getElementById("kpi-pii-value");
+        const kpiPiiSub = document.getElementById("kpi-pii-sub");
+        if (kpiPiiValue) {
+            kpiPiiValue.textContent = activePii.length ? `${activePii.length} column(s) flagged` : "None flagged";
+            kpiPiiValue.className = `kpi-value ${activePii.length ? "warning-text" : "success-text"}`;
+        }
+        if (kpiPiiSub) {
+            kpiPiiSub.textContent = activePii.length
+                ? `Name-pattern match: ${activePii.map(h => h.column).join(", ")}`
+                : "Column-name scan found no match";
+        }
+
+        renderAgentDetailTabs();
+
         // Table body
         const assessTbody = document.getElementById("assessment-tbody");
         if (assessTbody) {
@@ -1271,7 +1851,7 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                     <td><code>${sh.meas}</code></td>
                     <td><span class="status-badge success">${sh.status}</span></td>
                 </tr>
-            `).join("");
+            `).join("") || `<tr><td colspan="6">No sheet inventory was returned for this app. See the gaps listed on the AssessmentAgent tab in Artifacts.</td></tr>`;
         }
 
         // C. Review Queue Tab Titles & Table
@@ -1669,19 +2249,22 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         `).join("");
     }
 
-    function recordNewJobRun(appData) {
+    function recordNewJobRun(appData, elapsedSeconds) {
         const history = getJobHistory();
         const randId = "MIG-" + Math.floor(1000 + Math.random() * 9000);
         const now = new Date();
         const dateStr = now.toISOString().slice(0, 10) + " " + now.toTimeString().slice(0, 5);
+        const parts = appData.visualsCnt.split("/");
 
         history.unshift({
             id: randId,
             file: appData.filename,
-            sheets: appData.visualsCnt.split("/")[0].trim(),
-            visuals: appData.visualsCnt.split("/")[1] ? appData.visualsCnt.split("/")[1].trim() : "10 Visuals",
-            time: ((600 + Math.random() * 300) / 100).toFixed(2) + "s",
-            audit: "PASSED (< 5%)",
+            // Counts the source never reported stay blank instead of falling back to
+            // a stand-in figure.
+            sheets: appData.unknownVisuals ? "Not reported" : parts[0].trim(),
+            visuals: appData.unknownVisuals || !parts[1] ? "Not reported" : parts[1].trim(),
+            time: typeof elapsedSeconds === "number" ? elapsedSeconds.toFixed(2) + "s" : "—",
+            audit: "Not computed",
             date: dateStr
         });
 
@@ -1709,14 +2292,24 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
     // 8. MICROSOFT AUTOGEN 4-PHASE MULTI-AGENT LIVE EXECUTION
     // ----------------------------------------------------------------------
     const btnStart = document.getElementById("btn-start-migration");
-    const btnMigrateQlik = document.querySelector(".btn-secondary-block");
+    // Must be looked up by id: the Qlik Cloud card now holds two .btn-secondary-block
+    // buttons, and the first one is "Test Connection".
+    const btnMigrateQlik = document.getElementById("btn-migrate-qlik");
     const consoleCard = document.getElementById("autogen-console");
     const consoleBody = document.getElementById("console-logs-body");
     const consoleBadge = document.getElementById("console-status-badge");
     const metricsRow = document.getElementById("console-metrics-row");
 
-    function executeMigrationFlow(btnElem) {
+    async function executeMigrationFlow(btnElem) {
         if (!btnElem) return;
+        // After a run the button turns into "View Artifacts"; its click listener is
+        // still attached, so without this guard a second click would silently start
+        // the whole migration over again.
+        if (btnElem.classList.contains("success-btn")) {
+            switchTab("tab-artifacts");
+            switchSubTab("sub-downloads");
+            return;
+        }
         if (btnElem.id === "btn-migrate-qlik") {
             const selectElem = document.getElementById("qlik-app-select");
             if (!selectElem || !selectElem.value) {
@@ -1724,44 +2317,57 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                 if (selectElem) selectElem.focus();
                 return;
             }
-            
-            // Mock a QVF object for Live API migration so the UI animation logic succeeds!
-            const selectedText = selectElem.options[selectElem.selectedIndex].text;
-            const safeName = selectedText.replace(/[^a-zA-Z0-9_-]/g, "_");
-            currentActiveQvf = {
-                fileName: selectedText,
-                fileSize: "Live API",
-                pbipName: safeName + "_AI_PowerBI",
-                pbitName: safeName + ".pbit",
-                pbitSize: "40 KB",
-                daxQueue: [{type: 'live', original: 'sum(Sales)', translated: 'SUM(Sales)'}],
-                visualsCnt: "5 Sheets / 20 Charts",
-                issuesCnt: 0,
-                status: "Ready",
-                hasLiveConnection: true
+            if (!qlikConnection) {
+                alert("The Qlik Cloud connection was lost. Please run Test Connection again.");
+                return;
+            }
+
+            const workspaceInput = document.getElementById("fabric-workspace");
+            const workspace = workspaceInput ? workspaceInput.value.trim() : "";
+            if (!workspace) {
+                alert("Please enter the Microsoft Fabric workspace name or ID to migrate into.");
+                if (workspaceInput) workspaceInput.focus();
+                return;
+            }
+            const capacityInput = document.getElementById("fabric-capacity");
+            const prefixInput = document.getElementById("fabric-prefix");
+            const fabricTarget = {
+                workspace: workspace,
+                capacity: capacityInput ? capacityInput.value.trim() : "",
+                prefix: prefixInput ? prefixInput.value.trim() : ""
             };
-            
-            // Refresh UI to display the active live app name in the sidebar
-            refreshAllTabsForActiveQvf(currentActiveQvf);
-            
+
+            // Read the app's real data model before anything is shown as migrated.
+            // If the tenant will not hand it over, the run does not start.
+            const appName = selectElem.options[selectElem.selectedIndex].text;
+            const originalLabel = btnElem.innerHTML;
+            btnElem.disabled = true;
+            btnElem.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Reading app metadata...`;
+            try {
+                const key = await loadQlikCloudApp(selectElem.value, appName);
+                APP_REGISTRY[key].fabricTarget = fabricTarget;
+                if (fabricTarget.prefix) {
+                    APP_REGISTRY[key].pbitName = `${fabricTarget.prefix}.pbit`;
+                    APP_REGISTRY[key].pbipName = `${fabricTarget.prefix}.pbip`;
+                }
+                refreshAllTabsForActiveQvf(APP_REGISTRY[key], [key]);
+            } catch (err) {
+                console.error(err);
+                alert(`Could not read "${appName}" from Qlik Cloud, so nothing was migrated.\n\n${err.message}`);
+                return;
+            } finally {
+                btnElem.disabled = false;
+                btnElem.innerHTML = originalLabel;
+            }
         } else if (!currentActiveQvf) {
-            // The user requested to make file upload optional.
-            // If they click Start Migration without a file, mock a default Demo App.
-            currentActiveQvf = {
-                fileName: "Demo_Migration.qvf",
-                fileSize: "0 KB (Demo)",
-                pbipName: "Demo_Migration_AI_PowerBI",
-                pbitName: "Demo_Migration.pbit",
-                pbitSize: "45 KB",
-                daxQueue: [{type: 'demo', original: 'Count(Id)', translated: 'COUNTROWS(Id)'}],
-                visualsCnt: "3 Sheets / 12 Charts",
-                issuesCnt: 0,
-                status: "Ready"
-            };
-            refreshAllTabsForActiveQvf(currentActiveQvf);
+            alert("Please browse and upload a .QVF file first to start migration!");
+            const fileInput = document.getElementById("qvf-file-input");
+            if (fileInput) fileInput.click();
+            return;
         }
 
         // 1. Immediate interactive button press & running feedback
+        const runStartedAt = Date.now();
         btnElem.disabled = true;
         const originalText = btnElem.innerHTML;
         btnElem.classList.remove("success-btn");
@@ -1784,31 +2390,31 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         ["assess", "parse", "map", "gen"].forEach(id => {
             const box = document.getElementById(`logs-agent-${id}`);
             if (box) box.innerHTML = "";
-            const badge = document.getElementById(`badge-agent-${id}`);
-            if (badge) {
-                badge.textContent = "RUNNING...";
-                badge.className = "agent-badge-tag running";
-            }
+            // The per-agent tab mirrors the same stream, so clear it too and drop
+            // its "nothing has run" placeholder.
+            const detailBox = document.getElementById(`logs-detail-${id}`);
+            if (detailBox) detailBox.innerHTML = "";
+            const detailEmpty = document.getElementById(`logs-empty-${id}`);
+            if (detailEmpty) detailEmpty.classList.add("hidden");
+            setAgentStatus(id, "RUNNING...", "running");
+            setAgentRunState(id, "Run in progress…");
         });
 
-        // Helper to append log line to specific agent box
+        // Helper to append a log line to an agent's console box and to the same
+        // agent's detail tab.
         const appendLogToAgent = (id, timeSec, msg) => {
-            const box = document.getElementById(`logs-agent-${id}`);
-            if (!box) return;
-            const row = document.createElement("div");
-            row.className = "log-line";
-            row.innerHTML = `<span class="log-time">[+${timeSec}s]</span> ${msg}`;
-            box.appendChild(row);
-            box.scrollTop = box.scrollHeight;
+            [`logs-agent-${id}`, `logs-detail-${id}`].forEach(boxId => {
+                const box = document.getElementById(boxId);
+                if (!box) return;
+                const row = document.createElement("div");
+                row.className = "log-line";
+                row.innerHTML = `<span class="log-time">[+${timeSec}s]</span> ${msg}`;
+                box.appendChild(row);
+                box.scrollTop = box.scrollHeight;
+            });
         };
 
-        const setAgentBadge = (id, label, styleClass) => {
-            const badge = document.getElementById(`badge-agent-${id}`);
-            if (badge) {
-                badge.textContent = label;
-                badge.className = `agent-badge-tag ${styleClass}`;
-            }
-        };
+        const setAgentBadge = (id, label, styleClass) => setAgentStatus(id, label, styleClass);
 
         // Dynamic phase messages customized to the .qvf files in this run. Every
         // uploaded file is migrated, so the console reports each one by name rather
@@ -1825,9 +2431,18 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         });
         setTimeout(() => appendLogToAgent("assess", "1.3", `[PHASE 1] Analyzing Load Script, variables & PII scan...`), 1300);
         setTimeout(() => {
-            appendLogToAgent("assess", "2.1", `[SUCCESS] Assessment complete. PII Risk: None. Priority: Medium.`);
+            // Reported from the actual column-name scan, never assumed clean.
+            const runPii = scanPiiForApps(runApps);
+            appendLogToAgent("assess", "2.1", runPii.length
+                ? `[REVIEW] Assessment complete. ${runPii.length} column(s) matched a PII name pattern: ${runPii.map(h => h.column).join(", ")}.`
+                : `[SUCCESS] Assessment complete. No column name matched a PII pattern.`);
             setAgentBadge("assess", "COMPLETED", "completed");
         }, 2100);
+        // Anything the source would not hand over is stated in the stream, not
+        // quietly dropped.
+        gapsFor(runApps).forEach((g, i) => {
+            setTimeout(() => appendLogToAgent("assess", (2.2 + i * 0.1).toFixed(1), `[GAP] ${g.app}: ${g.gap}`), 2200 + i * 100);
+        });
 
         // 2. ReportParsingAgent (Phase 2)
         setTimeout(() => appendLogToAgent("parse", "1.5", `[SYSTEM] AutoGen ReportParsingAgent initialized.`), 1500);
@@ -1869,30 +2484,38 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                 const mSheets = document.getElementById("metric-sheets");
                 const mVisuals = document.getElementById("metric-visuals");
                 const mDax = document.getElementById("metric-dax");
-                if (runApps.length > 1) {
-                    // Totals across the batch, so the summary matches what was bundled.
-                    const sheets = runApps.reduce((n, a) => n + leadingCount(a.visualsCnt.split("/")[0]), 0);
-                    const charts = runApps.reduce((n, a) => n + leadingCount(a.visualsCnt.split("/")[1]), 0);
-                    if (mSheets) mSheets.textContent = `${sheets} Sheets`;
-                    if (mVisuals) mVisuals.textContent = `${charts} Charts`;
-                } else {
-                    if (mSheets) mSheets.textContent = currentActiveQvf.visualsCnt.split("/")[0].trim();
-                    if (mVisuals) mVisuals.textContent = currentActiveQvf.visualsCnt.split("/")[1] ? currentActiveQvf.visualsCnt.split("/")[1].trim() : "25 Charts";
-                }
+                // Totals across the run, so the summary matches what was bundled. An
+                // app whose counts were never reported is left out of the total and
+                // shown as such — the old fallback here invented "25 Charts".
+                const runTotals = batchTotals(runApps);
+                if (mSheets) mSheets.textContent = runTotals.unknown && !runTotals.sheets
+                    ? "Not reported"
+                    : `${partialCount(runTotals.sheets, runTotals)} Sheets`;
+                if (mVisuals) mVisuals.textContent = runTotals.unknown && !runTotals.charts
+                    ? "Not reported"
+                    : `${partialCount(runTotals.charts, runTotals)} Charts`;
                 if (mDax) mDax.textContent = `${totalDax} Auto-Mapped`;
+                // Nothing compares source output against migrated output, so this
+                // card no longer claims a passed discrepancy audit.
+                const mDisc = document.getElementById("metric-discrepancy");
+                if (mDisc) mDisc.textContent = "Not computed — needs a source/target value comparison";
             }
             // One history row per migrated file, oldest first so the newest lands on top.
-            runApps.forEach(recordNewJobRun);
+            const elapsed = (Date.now() - runStartedAt) / 1000;
+            runApps.forEach(app => recordNewJobRun(app, elapsed));
+
+            // Flip the agent tabs from "planned scope" to "produced by this run".
+            lastRunSummary = {
+                at: new Date().toLocaleTimeString(),
+                count: runApps.length
+            };
+            renderAgentDetailTabs();
 
             // 2. Change button to SUCCESS & make it clickable to jump to Artifacts
             btnElem.disabled = false;
             btnElem.classList.remove("running-btn");
             btnElem.classList.add("success-btn");
             btnElem.innerHTML = `<i class="fa-solid fa-circle-check"></i> Migration Completed! View Artifacts ->`;
-            btnElem.onclick = (e) => {
-                e.preventDefault();
-                switchTab("tab-artifacts");
-            };
         }, 7500);
     }
 
@@ -1903,45 +2526,200 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         btnMigrateQlik.addEventListener("click", () => executeMigrationFlow(btnMigrateQlik));
     }
 
+    // ----------------------------------------------------------------------
+    // 8b. LIVE QLIK CLOUD REST CONNECTION
+    // Lists the tenant's real apps into the picker. Credentials are read from the
+    // form for this one request only — nothing is persisted.
+    // ----------------------------------------------------------------------
+    // Held in memory for the session only, so "Migrate Selected App" can re-use the
+    // same tenant/credentials the picker was filled from. Never written to storage.
+    let qlikConnection = null;
+
+    function qlikHeaders() {
+        return { "Authorization": `Bearer ${qlikConnection.apiKey}` };
+    }
+
+    // Pasting from the Qlik console often brings the scheme along ("Bearer eyJ…"),
+    // which would go out as "Bearer Bearer eyJ…" and answer 401.
+    function normaliseApiKey(raw) {
+        return String(raw || "").trim().replace(/^Bearer\s+/i, "").trim();
+    }
+
+    // A Qlik tenant only answers cross-origin browser calls from origins it has
+    // been configured to allow, so a direct fetch returns an empty-bodied 401 even
+    // with a working key. dev_server.py relays the call instead, which makes it
+    // same-origin here and an ordinary server call at the tenant.
+    let usedProxy = false;
+
+    function qlikRequestUrl(absoluteUrl) {
+        if (window.location.protocol === "file:") {
+            usedProxy = false;
+            return absoluteUrl;
+        }
+        usedProxy = true;
+        return `${window.location.origin}/qlik-proxy?target=${encodeURIComponent(absoluteUrl)}`;
+    }
+
+    function normaliseTenantUrl(raw) {
+        let url = String(raw || "").trim();
+        if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+        // Only the tenant origin is wanted; pasting a full app URL is common.
+        try {
+            return new URL(url).origin;
+        } catch (e) {
+            return url.replace(/\/+$/, "");
+        }
+    }
+
+    // Reports what the tenant actually returned. The old message asserted "Invalid
+    // API Key" for every 401, which hid the real cause.
+    async function describeQlikError(response, baseUrl) {
+        let detail = "";
+        let raw = "";
+        try {
+            raw = (await response.text()).trim();
+            const body = raw ? JSON.parse(raw) : null;
+            const errors = body && (body.errors || body.error);
+            if (Array.isArray(errors) && errors.length) {
+                detail = errors.map(e => [e.code, e.title, e.detail].filter(Boolean).join(" — ")).join("\n");
+            } else if (body && typeof body === "object") {
+                detail = JSON.stringify(body).slice(0, 300);
+            } else if (raw) {
+                detail = raw.slice(0, 300);
+            }
+        } catch (e) {
+            if (raw) detail = raw.slice(0, 300);
+        }
+
+        // The relay reports its own failures under `proxyError`; those are about
+        // this machine, not about the tenant or the key.
+        let proxyError = "";
+        try {
+            const parsed = raw ? JSON.parse(raw) : null;
+            if (parsed && parsed.proxyError) proxyError = parsed.proxyError;
+        } catch (e) {
+            /* handled above */
+        }
+        if (proxyError) {
+            return `The local Qlik relay could not complete the call.\n\n${proxyError}`;
+        }
+
+        // Served by the plain static server, which has no /qlik-proxy route.
+        if (usedProxy && response.status === 404 && !/qlik/i.test(detail)) {
+            return [
+                "The local Qlik relay is not running.",
+                "",
+                "Start the app with the relay so browser calls can reach your tenant:",
+                "  python dev_server.py",
+                "",
+                "(A plain static server has no /qlik-proxy route, which is this 404.)"
+            ].join("\n");
+        }
+
+        const lines = [`${response.status}${response.statusText ? " " + response.statusText : ""} from ${baseUrl}`];
+        lines.push("", detail ? "Tenant said:\n" + detail : "The tenant returned no error details (empty body).");
+
+        if (response.status === 401 || response.status === 403) {
+            lines.push(
+                "",
+                "The call was relayed server-side, so this is the tenant judging the key itself:",
+                "check it was created in THIS tenant, that it has not been revoked, and that",
+                "its owning user can see apps here.",
+                "",
+                "To compare outside the app, run this with your own key:",
+                `  curl.exe -i -H "Authorization: Bearer YOUR_KEY" "${baseUrl}/api/v1/items?resourceType=app"`
+            );
+        }
+        return lines.join("\n");
+    }
+
+    function formatBytes(bytes) {
+        if (typeof bytes !== "number" || !isFinite(bytes) || bytes <= 0) return null;
+        return bytes > 1024 * 1024
+            ? (bytes / (1024 * 1024)).toFixed(2) + " MB"
+            : (bytes / 1024).toFixed(1) + " KB";
+    }
+
+    // Builds a registry entry for a live Qlik Cloud app out of what the REST data
+    // model endpoint actually returns. Everything the endpoint cannot provide is
+    // recorded in `gaps` and shown as missing — never filled in with a guess.
+    async function loadQlikCloudApp(appId, appName) {
+        const endpoint = `${qlikConnection.baseUrl}/api/v1/apps/${encodeURIComponent(appId)}/data/metadata`;
+        const response = await fetch(qlikRequestUrl(endpoint), { method: "GET", headers: qlikHeaders() });
+        if (!response.ok) {
+            throw new Error(await describeQlikError(response, endpoint));
+        }
+
+        const meta = await response.json();
+        const fields = Array.isArray(meta.fields) ? meta.fields : [];
+        const tables = Array.isArray(meta.tables) ? meta.tables : [];
+        const columns = fields.map(f => f.name).filter(Boolean);
+        const size = formatBytes(meta.static_byte_size);
+
+        const safeName = appName.replace(/[^a-zA-Z0-9 _-]/g, "_").trim() || appId;
+        const key = `${safeName} (Qlik Cloud)`;
+
+        APP_REGISTRY[key] = {
+            name: appName,
+            filename: key,
+            source: "qlik-cloud",
+            appId: appId,
+            size: size || "Size not reported",
+            sizeBytes: typeof meta.static_byte_size === "number" ? meta.static_byte_size : 0,
+            fieldsCnt: `${columns.length} Columns`,
+            // The REST data-model endpoint describes the data model, not the app's
+            // sheets or visualisations, so those counts stay unknown rather than 0.
+            visualsCnt: "Not exposed by the REST API",
+            unknownVisuals: true,
+            pbitName: `${safeName}.pbit`,
+            pbipName: `${safeName}.pbip`,
+            projectDir: `${safeName.replace(/\s+/g, "_")}_PowerBI_Project/`,
+            pbitSize: "generated on download",
+            tablesCnt: tables.length,
+            sheets: [],
+            daxQueue: [],
+            columns: columns,
+            gaps: [
+                "Sheet & chart inventory — /data/metadata returns the data model only. App objects need a QIX engine session, which this browser client does not open.",
+                "Chart expressions — no Qlik expressions were retrieved, so no DAX was translated for this app.",
+                columns.length ? null : "Field names — the endpoint returned no fields for this app."
+            ].filter(Boolean)
+        };
+
+        return key;
+    }
+
     const btnTestConnection = document.getElementById("btn-test-connection");
     if (btnTestConnection) {
         btnTestConnection.addEventListener("click", async () => {
-            const tenantUrl = document.getElementById("qlik-tenant-url")?.value.trim();
-            const apiKey = document.getElementById("qlik-api-key")?.value.trim();
-            const webId = document.getElementById("qlik-web-id")?.value.trim();
+            const tenantUrlInput = document.getElementById("qlik-tenant-url");
+            const apiKeyInput = document.getElementById("qlik-api-key");
+            const tenantUrl = tenantUrlInput ? tenantUrlInput.value.trim() : "";
+            const apiKey = normaliseApiKey(apiKeyInput ? apiKeyInput.value : "");
             if (!tenantUrl || !apiKey) {
                 alert("Please enter both Tenant URL and API Key.");
                 return;
             }
-            
-            let cleanUrl = tenantUrl;
-            if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
-            if (!cleanUrl.startsWith('http')) cleanUrl = 'https://' + cleanUrl;
 
+            const cleanUrl = normaliseTenantUrl(tenantUrl);
             const endpoint = `${cleanUrl}/api/v1/items?resourceType=app`;
-            
+
             btnTestConnection.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Connecting...';
             btnTestConnection.disabled = true;
 
             try {
-                const headers = {
-                    'Authorization': `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json'
-                };
-                if (webId) {
-                    headers['qlik-web-integration-id'] = webId;
-                }
-
-                const response = await fetch(endpoint, {
-                    method: 'GET',
-                    headers: headers
+                // Bearer only. Adding qlik-web-integration-id switches the tenant to
+                // its cookie/session flow, which a browser request carrying an API key
+                // has no session for — that combination answers 401.
+                // Content-Type is omitted too: there is no body, and it would widen the
+                // CORS preflight for nothing.
+                const response = await fetch(qlikRequestUrl(endpoint), {
+                    method: "GET",
+                    headers: { "Authorization": `Bearer ${apiKey}` }
                 });
 
                 if (!response.ok) {
-                    if (response.status === 401) {
-                        throw new Error("401 Unauthorized: Invalid API Key.");
-                    }
-                    throw new Error(`Error: ${response.status} ${response.statusText}`);
+                    throw new Error(await describeQlikError(response, cleanUrl));
                 }
 
                 const data = await response.json();
@@ -1958,22 +2736,24 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                         option.textContent = app.name || "Unnamed App";
                         select.appendChild(option);
                     });
-                    
+
+                    qlikConnection = { baseUrl: cleanUrl, apiKey: apiKey };
+
                     document.getElementById("qlik-apps-container").style.display = "block";
+                    document.getElementById("fabric-target-container").style.display = "block";
                     document.getElementById("btn-migrate-qlik").style.display = "block";
                     btnTestConnection.style.display = "none";
                     alert(`Connection Successful! Loaded ${apps.length} apps.`);
                 }
-
             } catch (err) {
                 console.error(err);
-                if (err.name === 'TypeError' && (err.message.includes('fetch') || err.message.includes('Network'))) {
-                    alert(`CORS Error: The browser blocked the request.\n\nPlease go to your Qlik Cloud Management Console -> Settings -> Content Security Policy, and add an Origin for 'http://localhost:5173' to allow this app to connect!`);
+                if (err.name === "TypeError" && (err.message.includes("fetch") || err.message.includes("Network"))) {
+                    alert(`The browser blocked the request before it reached Qlik (CORS).\n\nIn the Qlik Management Console -> Content Security Policy, add an origin entry for '${window.location.origin}' with Connect-src enabled.`);
                 } else {
                     alert("Connection Failed: " + err.message);
                 }
             } finally {
-                btnTestConnection.innerHTML = 'Test Connection';
+                btnTestConnection.innerHTML = "Test Connection";
                 btnTestConnection.disabled = false;
             }
         });
