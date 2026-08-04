@@ -1177,6 +1177,7 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
     const dropzone = document.getElementById("dropzone");
     const fileInput = document.getElementById("qvf-file-input");
     const btnBrowse = document.getElementById("btn-browse-file");
+    const MAX_UPLOAD_FILES = 10;
 
     if (bundledSelect) {
         bundledSelect.addEventListener("change", (e) => {
@@ -1203,10 +1204,11 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
             });
         }
 
-        fileInput.addEventListener("change", (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
+        // Reads one .qvf, registers it in APP_REGISTRY + the dropdown, and
+        // resolves with its registry key. Never rejects: a file that cannot be
+        // read is resolved as null so the rest of the batch still lands.
+        function ingestQvfFile(file) {
+          return new Promise((resolve) => {
             const filename = file.name;
             const sizeInMB = (file.size / (1024 * 1024)).toFixed(2) + " MB";
             const sizeInKB = (file.size / 1024).toFixed(1) + " KB";
@@ -1296,16 +1298,60 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                     columns: candidateCols
                 };
 
-                if (!Array.from(bundledSelect.options).some(o => o.value === filename)) {
+                if (bundledSelect && !Array.from(bundledSelect.options).some(o => o.value === filename)) {
                     const opt = document.createElement("option");
                     opt.value = filename;
                     opt.textContent = `${filename} (${displaySize})`;
                     bundledSelect.appendChild(opt);
                 }
-                bundledSelect.value = filename;
-                refreshAllTabsForActiveQvf(APP_REGISTRY[filename]);
+                resolve(filename);
+            };
+            reader.onerror = function() {
+                resolve(null);
             };
             reader.readAsArrayBuffer(file);
+          });
+        }
+
+        fileInput.addEventListener("change", (e) => {
+            const picked = Array.from(e.target.files || []);
+            // Allow re-picking the same file(s) later
+            e.target.value = "";
+            if (!picked.length) return;
+
+            const batch = picked.slice(0, MAX_UPLOAD_FILES);
+            const skipped = picked.length - batch.length;
+
+            Promise.all(batch.map(ingestQvfFile)).then((keys) => {
+                const loaded = keys.filter(Boolean);
+                const failed = keys.length - loaded.length;
+                if (!loaded.length) {
+                    alert("None of the selected files could be read.");
+                    return;
+                }
+
+                // The last successfully read file becomes the active migration target;
+                // every other file stays selectable in the dropdown.
+                const activeKey = loaded[loaded.length - 1];
+                if (bundledSelect) bundledSelect.value = activeKey;
+                refreshAllTabsForActiveQvf(APP_REGISTRY[activeKey]);
+
+                if (loaded.length > 1) {
+                    const dzName = document.getElementById("dropzone-name");
+                    if (dzName) {
+                        dzName.textContent = `${loaded.length} files uploaded — active: ${activeKey}`;
+                    }
+                }
+
+                const notes = [];
+                if (skipped > 0) {
+                    notes.push(`${skipped} file(s) beyond the ${MAX_UPLOAD_FILES}-file limit were not uploaded.`);
+                }
+                if (failed > 0) {
+                    notes.push(`${failed} file(s) could not be read and were skipped.`);
+                }
+                if (notes.length) alert(notes.join("\n"));
+            });
         });
     }
 
