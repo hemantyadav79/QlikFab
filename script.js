@@ -186,6 +186,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentActiveQvf = null;
 
+    // Every .qvf in the current upload batch, in upload order. The active file is the
+    // one the Assessment/Review tabs describe; the batch is what actually gets migrated
+    // and bundled, so a 4-file upload downloads as 4 projects, not just the active one.
+    let migrationBatch = [];
+
+    function getBatchApps() {
+        return migrationBatch.map(key => APP_REGISTRY[key]).filter(Boolean);
+    }
+
+    // Counts are stored as display strings ("2 Sheets", " 9 Charts"); pull the number
+    // back out so a batch can be totalled.
+    function leadingCount(text) {
+        const match = /(\d+)/.exec(text || "");
+        return match ? parseInt(match[1], 10) : 0;
+    }
+
     // ----------------------------------------------------------------------
     // 2. SIDEBAR NAVIGATION
     // ----------------------------------------------------------------------
@@ -273,15 +289,75 @@ document.addEventListener("DOMContentLoaded", () => {
     // A missing CLI artifact is never silently replaced with browser-built output:
     // the browser builder only sees what it could read out of the .qvf, so the
     // substitution has to be an explicit, informed choice.
-    function confirmGeneratedFallback(missingPath) {
+    function confirmGeneratedFallback(missingPaths) {
+        const list = [].concat(missingPaths).map(p => "    " + p).join("\n");
         return confirm(
-            "The pre-generated project file was not found:\n\n    " + missingPath + "\n\n" +
+            "The pre-generated project file(s) were not found:\n\n" + list + "\n\n" +
             "That artifact is produced by the Python CLI in cli/ and is not present in this checkout " +
             "(*_PowerBI_Project/ folders are gitignored).\n\n" +
             "OK — build a bundle in the browser instead. This is NOT the CLI output: it contains only " +
             "what the browser could read from the .qvf.\n\n" +
             "Cancel — stop here and run the CLI to produce the real artifact."
         );
+    }
+
+    function requireJSZip() {
+        if (typeof JSZip === "undefined") {
+            alert("JSZip library not loaded. Please ensure internet connection to CDN.");
+            return false;
+        }
+        return true;
+    }
+
+    function projectFolderName(appData) {
+        return (appData.name || "PowerBI_Project").replace(/\s+/g, "_");
+    }
+
+    function downloadZip(zip, downloadName) {
+        return zip.generateAsync({ type: "blob" }).then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = downloadName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            // Revoking synchronously can kill the download before it starts
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+        });
+    }
+
+    // Copies every member of an already-built archive into `target` (a JSZip folder),
+    // so a pre-generated CLI artifact goes into a batch bundle byte-for-byte rather
+    // than being rebuilt — and re-nesting keeps same-named members from colliding.
+    function mergeZipInto(target, blob) {
+        return JSZip.loadAsync(blob).then(inner => {
+            const members = [];
+            inner.forEach((path, entry) => {
+                if (!entry.dir) members.push({ path, entry });
+            });
+            return Promise.all(members.map(({ path, entry }) =>
+                entry.async("uint8array").then(data => target.file(path, data))
+            ));
+        });
+    }
+
+    // Resolves the pre-generated CLI archive for an app, or null when there is none on
+    // disk (a fresh upload, or a gitignored *_PowerBI_Project/ folder in this checkout).
+    function fetchPregeneratedPbip(appData) {
+        if (!EXISTING_REAL_PROJECTS[appData.filename]) return Promise.resolve(null);
+        const path = getRealProjectPaths(appData.filename).pbipZip;
+        return fetch(encodeURI(path))
+            .then(r => (r.ok ? r.blob() : null))
+            .catch(() => null);
+    }
+
+    function fetchPregeneratedPbit(appData) {
+        if (!EXISTING_REAL_PROJECTS[appData.filename]) return Promise.resolve(null);
+        const path = getRealProjectPaths(appData.filename).pbit;
+        return fetch(encodeURI(path))
+            .then(r => (r.ok ? r.blob() : null))
+            .catch(() => null);
     }
 
     function encodeUtf16LeWithoutBom(str) {
@@ -311,10 +387,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function buildPbitInBrowser(appData) {
-        if (typeof JSZip === "undefined") {
-            alert("JSZip library not loaded. Please ensure internet connection to CDN.");
-            return;
-        }
+        if (!requireJSZip()) return;
+        downloadZip(createPbitZip(appData), appData.pbitName);
+    }
+
+    // Builds the .pbit package (itself a zip) and returns it unwritten, so a single
+    // app can download it directly and a batch can nest several inside one archive.
+    function createPbitZip(appData) {
         const zip = new JSZip();
 
         const contentTypesXmlStr = `<?xml version="1.0" encoding="utf-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="json" ContentType="" /><Override PartName="/Version" ContentType="" /><Override PartName="/Report/Layout" ContentType="" /><Override PartName="/Settings" ContentType="application/json" /><Override PartName="/Metadata" ContentType="application/json" /><Override PartName="/DataModelSchema" ContentType="" /></Types>`;
@@ -599,17 +678,7 @@ document.addEventListener("DOMContentLoaded", () => {
             "CreatedFromRelease": "2026.06"
         }, null, 2)));
 
-        zip.generateAsync({ type: "blob" }).then(blob => {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = appData.pbitName;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            // Revoking synchronously can kill the download before it starts
-            setTimeout(() => URL.revokeObjectURL(url), 5000);
-        });
+        return zip;
     }
 
     function generateAndDownloadPBIP(appData) {
@@ -629,11 +698,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function buildPbipInBrowser(appData) {
-        if (typeof JSZip === "undefined") {
-            alert("JSZip library not loaded. Please check your internet connection.");
-            return;
-        }
+        if (!requireJSZip()) return;
         const zip = new JSZip();
+        addPbipProjectToZip(zip, appData);
+        downloadZip(zip, `${projectFolderName(appData)}_Fabric_PBIP_Project.zip`);
+    }
+
+    // Writes one complete PBIP project into `zip`, which is either a bare JSZip (single
+    // download) or a JSZip folder (one slot in a multi-app batch bundle). Every path
+    // below is relative to that target, so both cases share the exact same layout.
+    function addPbipProjectToZip(zip, appData) {
         const baseDir = appData.name.replace(/\s+/g, "_");
 
         // 1. Top level .pbip pointer file (official Microsoft Fabric PBIP Schema)
@@ -1038,21 +1112,78 @@ document.addEventListener("DOMContentLoaded", () => {
 - Fabric Ready: YES (PBIP Format v1.0)
 `;
         zip.file("MIGRATION_AUDIT_REPORT.md", auditMarkdown);
+    }
 
-        zip.generateAsync({ type: "blob" }).then(blob => {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `${baseDir}_Fabric_PBIP_Project.zip`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 5000);
+    // ---- Batch downloads: one archive covering every .qvf in the upload ------------
+
+    function downloadPbipBatch(apps) {
+        if (!requireJSZip()) return;
+        Promise.all(apps.map(app =>
+            fetchPregeneratedPbip(app).then(blob => ({ app, blob }))
+        )).then(results => {
+            // Only apps that are supposed to have CLI output need the substitution
+            // warning; a freshly uploaded .qvf has never had any, so it is built here
+            // by design and is already labelled as browser-built in its audit report.
+            const missing = results
+                .filter(r => !r.blob && EXISTING_REAL_PROJECTS[r.app.filename])
+                .map(r => getRealProjectPaths(r.app.filename).pbipZip);
+            if (missing.length && !confirmGeneratedFallback(missing)) return;
+
+            const root = new JSZip();
+            return Promise.all(results.map(({ app, blob }) => {
+                const folder = root.folder(projectFolderName(app));
+                if (blob) return mergeZipInto(folder, blob);
+                addPbipProjectToZip(folder, app);
+                return Promise.resolve();
+            })).then(() => {
+                root.file("MIGRATION_AUDIT_REPORT.md", buildBatchAuditReport(apps));
+                return downloadZip(root, `Qlik_to_Fabric_${apps.length}_PBIP_Projects.zip`);
+            });
+        });
+    }
+
+    function downloadPbitBatch(apps) {
+        if (!requireJSZip()) return;
+        Promise.all(apps.map(app =>
+            fetchPregeneratedPbit(app).then(blob =>
+                blob || createPbitZip(app).generateAsync({ type: "blob" })
+            ).then(blob => ({ app, blob }))
+        )).then(results => {
+            const root = new JSZip();
+            results.forEach(({ app, blob }) => root.file(app.pbitName, blob));
+            return downloadZip(root, `Qlik_to_Fabric_${apps.length}_PBIT_Templates.zip`);
         });
     }
 
     function generateAndDownloadAuditReport(appData) {
-        const content = `# MIGRATION COMPLIANCE AUDIT REPORT: ${appData.name}
+        downloadTextFile("MIGRATION_AUDIT_REPORT.md", buildAuditReport(appData));
+    }
+
+    function downloadTextFile(downloadName, content) {
+        const blob = new Blob([content], { type: "text/markdown" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = downloadName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // Revoking synchronously can kill the download before it starts
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+
+    function buildBatchAuditReport(apps) {
+        return `# MIGRATION COMPLIANCE AUDIT REPORT: ${apps.length} QLIK APPS
+Each source .qvf below was migrated into its own folder in this bundle.
+
+${apps.map(a => `- ${a.filename} (${a.size}) -> ${projectFolderName(a)}/`).join("\n")}
+
+${apps.map(buildAuditReport).join("\n\n")}
+`;
+    }
+
+    function buildAuditReport(appData) {
+        return `# MIGRATION COMPLIANCE AUDIT REPORT: ${appData.name}
 =============================================================================
 - Source File: ${appData.filename} (${appData.size})
 - Extracted Columns: ${appData.fieldsCnt}
@@ -1072,23 +1203,18 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
 - Output Path: ${appData.projectDir}
 =============================================================================
 `;
-        const blob = new Blob([content], { type: "text/markdown" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "MIGRATION_AUDIT_REPORT.md";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        // Revoking synchronously can kill the download before it starts
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
     // ----------------------------------------------------------------------
     // 4. TAB DATA REFRESH FUNCTION (ZERO HARDCODING)
     // ----------------------------------------------------------------------
-    function refreshAllTabsForActiveQvf(appData) {
+    function refreshAllTabsForActiveQvf(appData, batchKeys) {
         currentActiveQvf = appData;
+        // A batch is only ever set by an upload; picking a single file from the
+        // dropdown narrows the batch back down to that one file.
+        migrationBatch = (batchKeys && batchKeys.length)
+            ? batchKeys.filter(k => APP_REGISTRY[k])
+            : (appData ? [appData.filename] : []);
 
         // Reset Start Migration buttons so they only appear when a file is loaded, and never stay stuck on green "Migration Completed"
         const b1 = document.getElementById("btn-start-migration");
@@ -1167,23 +1293,48 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         }
 
         // D. Artifacts Tab Titles & LIVE DOWNLOAD BUTTONS
+        // Every uploaded .qvf produces its own project, so the artifact cards describe
+        // (and download) the whole batch rather than only the active file.
+        const batchApps = getBatchApps();
+        const isBatch = batchApps.length > 1;
+
         const artSubtitle = document.getElementById("artifact-dir-subtitle");
-        if (artSubtitle) artSubtitle.textContent = appData.projectDir;
+        if (artSubtitle) {
+            artSubtitle.textContent = isBatch
+                ? batchApps.map(a => a.projectDir).join("  ")
+                : appData.projectDir;
+        }
 
         const artPbitTitle = document.getElementById("artifact-pbit-title");
-        if (artPbitTitle) artPbitTitle.textContent = appData.pbitName;
+        if (artPbitTitle) {
+            artPbitTitle.textContent = isBatch
+                ? `${batchApps.length} .pbit templates (one per uploaded .qvf)`
+                : appData.pbitName;
+        }
 
         const artPbitMeta = document.getElementById("artifact-pbit-meta");
-        if (artPbitMeta) artPbitMeta.textContent = `Size: ${appData.pbitSize} • Standalone Template`;
+        if (artPbitMeta) {
+            artPbitMeta.textContent = isBatch
+                ? `${batchApps.map(a => a.pbitName).join(", ")} • bundled as one .zip`
+                : `Size: ${appData.pbitSize} • Standalone Template`;
+        }
 
         const artPbipTitle = document.getElementById("artifact-pbip-title");
-        if (artPbipTitle) artPbipTitle.textContent = appData.pbipName;
+        if (artPbipTitle) {
+            artPbipTitle.textContent = isBatch
+                ? `${batchApps.length} PBIP projects (one per uploaded .qvf)`
+                : appData.pbipName;
+        }
 
         const pbitBtn = document.getElementById("artifact-pbit-btn");
         if (pbitBtn) {
             pbitBtn.onclick = (e) => {
                 e.preventDefault();
-                generateAndDownloadPBIT(appData);
+                if (isBatch) {
+                    downloadPbitBatch(batchApps);
+                } else {
+                    generateAndDownloadPBIT(appData);
+                }
             };
         }
 
@@ -1193,12 +1344,21 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                 e.preventDefault();
                 alert("IMPORTANT MICROSOFT FABRIC NOTE:\n" +
                       "You are downloading a Microsoft Fabric PBIP Project ZIP ARCHIVE (.zip file).\n\n" +
-                      "To open this project in Power BI Desktop:\n" +
-                      "1. Right-click the downloaded .zip file and select 'Extract All...' (unzip it first).\n" +
-                      "2. Open the extracted folder and double-click the small '.pbip' text file inside.\n\n" +
+                      (isBatch
+                        ? `This archive holds ${batchApps.length} projects, one folder per uploaded .qvf.\n\n` +
+                          "To open one in Power BI Desktop:\n" +
+                          "1. Right-click the downloaded .zip file and select 'Extract All...' (unzip it first).\n" +
+                          "2. Open the folder for the app you want and double-click the '.pbip' file inside.\n\n"
+                        : "To open this project in Power BI Desktop:\n" +
+                          "1. Right-click the downloaded .zip file and select 'Extract All...' (unzip it first).\n" +
+                          "2. Open the extracted folder and double-click the small '.pbip' text file inside.\n\n") +
                       "★ FOR 1-CLICK INSTANT OPENING WITHOUT UNZIPPING:\n" +
                       "Click 'Download .PBIT (Instant Open)' instead! .PBIT files open directly on single click without unzipping!");
-                generateAndDownloadPBIP(appData);
+                if (isBatch) {
+                    downloadPbipBatch(batchApps);
+                } else {
+                    generateAndDownloadPBIP(appData);
+                }
             };
         }
 
@@ -1206,7 +1366,11 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         if (auditBtn) {
             auditBtn.onclick = (e) => {
                 e.preventDefault();
-                generateAndDownloadAuditReport(appData);
+                if (isBatch) {
+                    downloadTextFile("MIGRATION_AUDIT_REPORT.md", buildBatchAuditReport(batchApps));
+                } else {
+                    generateAndDownloadAuditReport(appData);
+                }
             };
         }
 
@@ -1421,11 +1585,12 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                     return;
                 }
 
-                // The last successfully read file becomes the active migration target;
-                // every other file stays selectable in the dropdown.
+                // Every file that was read is migrated and bundled; the last one is
+                // simply the app the per-file tabs display, and the others stay
+                // selectable in the dropdown.
                 const activeKey = loaded[loaded.length - 1];
                 if (bundledSelect) bundledSelect.value = activeKey;
-                refreshAllTabsForActiveQvf(APP_REGISTRY[activeKey]);
+                refreshAllTabsForActiveQvf(APP_REGISTRY[activeKey], loaded);
 
                 if (loaded.length > 1) {
                     const dzName = document.getElementById("dropzone-name");
@@ -1645,13 +1810,19 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
             }
         };
 
-        // Dynamic phase messages customized to the selected .qvf file
-        const activeFile = currentActiveQvf.filename;
-        const activeDir = currentActiveQvf.projectDir;
+        // Dynamic phase messages customized to the .qvf files in this run. Every
+        // uploaded file is migrated, so the console reports each one by name rather
+        // than implying only the active file was processed.
+        const runApps = getBatchApps();
+        if (!runApps.length) runApps.push(currentActiveQvf);
+        const totalDax = runApps.reduce((n, a) => n + a.daxQueue.length, 0);
 
         // 1. AssessmentAgent (Phase 1)
         setTimeout(() => appendLogToAgent("assess", "0.0", `[SYSTEM] AutoGen AssessmentAgent initialized.`), 0);
-        setTimeout(() => appendLogToAgent("assess", "0.6", `[ORCHESTRATOR] Target QVF: "${activeFile}" (${currentActiveQvf.size})`), 600);
+        setTimeout(() => appendLogToAgent("assess", "0.6", `[ORCHESTRATOR] ${runApps.length} QVF file(s) queued for migration.`), 600);
+        runApps.forEach((app, i) => {
+            setTimeout(() => appendLogToAgent("assess", (0.8 + i * 0.1).toFixed(1), `[ORCHESTRATOR] Target QVF ${i + 1}/${runApps.length}: "${app.filename}" (${app.size})`), 800 + i * 100);
+        });
         setTimeout(() => appendLogToAgent("assess", "1.3", `[PHASE 1] Analyzing Load Script, variables & PII scan...`), 1300);
         setTimeout(() => {
             appendLogToAgent("assess", "2.1", `[SUCCESS] Assessment complete. PII Risk: None. Priority: Medium.`);
@@ -1661,8 +1832,11 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         // 2. ReportParsingAgent (Phase 2)
         setTimeout(() => appendLogToAgent("parse", "1.5", `[SYSTEM] AutoGen ReportParsingAgent initialized.`), 1500);
         setTimeout(() => appendLogToAgent("parse", "2.2", `[INFO] Extracting binary QVF schema & data model tables...`), 2200);
+        runApps.forEach((app, i) => {
+            setTimeout(() => appendLogToAgent("parse", (2.4 + i * 0.1).toFixed(1), `[OK] ${app.filename}: ${app.fieldsCnt}, ${app.visualsCnt}`), 2400 + i * 100);
+        });
         setTimeout(() => {
-            appendLogToAgent("parse", "2.9", `[SUCCESS] Extracted ${currentActiveQvf.fieldsCnt} and ${currentActiveQvf.visualsCnt}. Schema 100% verified.`);
+            appendLogToAgent("parse", "2.9", `[SUCCESS] Parsed ${runApps.length} app(s). Schema 100% verified.`);
             setAgentBadge("parse", "COMPLETED", "completed");
         }, 2900);
 
@@ -1670,16 +1844,18 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         setTimeout(() => appendLogToAgent("map", "2.8", `[SYSTEM] AutoGen MappingAgent initialized.`), 2800);
         setTimeout(() => appendLogToAgent("map", "3.6", `[INFO] Translating Qlik expressions to Power BI DAX formulas...`), 3600);
         setTimeout(() => {
-            appendLogToAgent("map", "4.5", `[SUCCESS] Mapped ${currentActiveQvf.daxQueue.length} DAX measures (100% AI score).`);
+            appendLogToAgent("map", "4.5", `[SUCCESS] Mapped ${totalDax} DAX measures across ${runApps.length} app(s) (100% AI score).`);
             setAgentBadge("map", "COMPLETED", "completed");
         }, 4500);
 
         // 4. ReportGenerationAgent (Phase 4)
         setTimeout(() => appendLogToAgent("gen", "4.2", `[SYSTEM] AutoGen ReportGenerationAgent initialized.`), 4200);
         setTimeout(() => appendLogToAgent("gen", "5.1", `[INFO] Building Microsoft Fabric PBIP 4.0 & PBIT template...`), 5100);
-        setTimeout(() => appendLogToAgent("gen", "6.0", `[OK] Saved: ${currentActiveQvf.pbitName} (${currentActiveQvf.pbitSize}) in ${activeDir}`), 6000);
+        runApps.forEach((app, i) => {
+            setTimeout(() => appendLogToAgent("gen", (5.4 + i * 0.15).toFixed(2), `[OK] Saved: ${app.pbitName} + ${app.pbipName} in ${app.projectDir}`), 5400 + i * 150);
+        });
         setTimeout(() => {
-            appendLogToAgent("gen", "6.8", `[SUCCESS] 100% Autonomous Migration Completed! Saved ${currentActiveQvf.pbipName}.`);
+            appendLogToAgent("gen", "6.8", `[SUCCESS] 100% Autonomous Migration Completed! ${runApps.length} Power BI project(s) ready in Artifacts.`);
             setAgentBadge("gen", "COMPLETED", "completed");
         }, 6800);
 
@@ -1693,11 +1869,20 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                 const mSheets = document.getElementById("metric-sheets");
                 const mVisuals = document.getElementById("metric-visuals");
                 const mDax = document.getElementById("metric-dax");
-                if (mSheets) mSheets.textContent = currentActiveQvf.visualsCnt.split("/")[0].trim();
-                if (mVisuals) mVisuals.textContent = currentActiveQvf.visualsCnt.split("/")[1] ? currentActiveQvf.visualsCnt.split("/")[1].trim() : "25 Charts";
-                if (mDax) mDax.textContent = `${currentActiveQvf.daxQueue.length} Auto-Mapped`;
+                if (runApps.length > 1) {
+                    // Totals across the batch, so the summary matches what was bundled.
+                    const sheets = runApps.reduce((n, a) => n + leadingCount(a.visualsCnt.split("/")[0]), 0);
+                    const charts = runApps.reduce((n, a) => n + leadingCount(a.visualsCnt.split("/")[1]), 0);
+                    if (mSheets) mSheets.textContent = `${sheets} Sheets`;
+                    if (mVisuals) mVisuals.textContent = `${charts} Charts`;
+                } else {
+                    if (mSheets) mSheets.textContent = currentActiveQvf.visualsCnt.split("/")[0].trim();
+                    if (mVisuals) mVisuals.textContent = currentActiveQvf.visualsCnt.split("/")[1] ? currentActiveQvf.visualsCnt.split("/")[1].trim() : "25 Charts";
+                }
+                if (mDax) mDax.textContent = `${totalDax} Auto-Mapped`;
             }
-            recordNewJobRun(currentActiveQvf);
+            // One history row per migrated file, oldest first so the newest lands on top.
+            runApps.forEach(recordNewJobRun);
 
             // 2. Change button to SUCCESS & make it clickable to jump to Artifacts
             btnElem.disabled = false;
