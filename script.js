@@ -260,6 +260,30 @@ document.addEventListener("DOMContentLoaded", () => {
         document.body.removeChild(a);
     }
 
+    // The pre-generated artifacts live in *_PowerBI_Project/ folders produced by
+    // the Python CLI. Those folders are gitignored, so they are absent in a fresh
+    // checkout — pointing an <a download> at a missing path fails silently in the
+    // download tray ("File wasn't available on site"), so check before linking.
+    function artifactExists(relativePath) {
+        return fetch(encodeURI(relativePath), { method: "HEAD" })
+            .then(r => r.ok)
+            .catch(() => false);
+    }
+
+    // A missing CLI artifact is never silently replaced with browser-built output:
+    // the browser builder only sees what it could read out of the .qvf, so the
+    // substitution has to be an explicit, informed choice.
+    function confirmGeneratedFallback(missingPath) {
+        return confirm(
+            "The pre-generated project file was not found:\n\n    " + missingPath + "\n\n" +
+            "That artifact is produced by the Python CLI in cli/ and is not present in this checkout " +
+            "(*_PowerBI_Project/ folders are gitignored).\n\n" +
+            "OK — build a bundle in the browser instead. This is NOT the CLI output: it contains only " +
+            "what the browser could read from the .qvf.\n\n" +
+            "Cancel — stop here and run the CLI to produce the real artifact."
+        );
+    }
+
     function encodeUtf16LeWithoutBom(str) {
         const buf = new Uint8Array(str.length * 2);
         for (let i = 0; i < str.length; i++) {
@@ -274,9 +298,19 @@ document.addEventListener("DOMContentLoaded", () => {
         if (EXISTING_REAL_PROJECTS[appData.filename]) {
             const paths = getRealProjectPaths(appData.filename);
             const downloadName = appData.pbitName || "Converted_Project.pbit";
-            downloadDirectFile(paths.pbit, downloadName);
+            artifactExists(paths.pbit).then(exists => {
+                if (exists) {
+                    downloadDirectFile(paths.pbit, downloadName);
+                } else if (confirmGeneratedFallback(paths.pbit)) {
+                    buildPbitInBrowser(appData);
+                }
+            });
             return;
         }
+        buildPbitInBrowser(appData);
+    }
+
+    function buildPbitInBrowser(appData) {
         if (typeof JSZip === "undefined") {
             alert("JSZip library not loaded. Please ensure internet connection to CDN.");
             return;
@@ -573,7 +607,8 @@ document.addEventListener("DOMContentLoaded", () => {
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            // Revoking synchronously can kill the download before it starts
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
         });
     }
 
@@ -581,9 +616,19 @@ document.addEventListener("DOMContentLoaded", () => {
         if (EXISTING_REAL_PROJECTS[appData.filename]) {
             const paths = getRealProjectPaths(appData.filename);
             const zipDownloadName = `${(appData.name || "PowerBI_Project").replace(/\s+/g, '_')}_Fabric_PBIP_Project.zip`;
-            downloadDirectFile(paths.pbipZip, zipDownloadName);
+            artifactExists(paths.pbipZip).then(exists => {
+                if (exists) {
+                    downloadDirectFile(paths.pbipZip, zipDownloadName);
+                } else if (confirmGeneratedFallback(paths.pbipZip)) {
+                    buildPbipInBrowser(appData);
+                }
+            });
             return;
         }
+        buildPbipInBrowser(appData);
+    }
+
+    function buildPbipInBrowser(appData) {
         if (typeof JSZip === "undefined") {
             alert("JSZip library not loaded. Please check your internet connection.");
             return;
@@ -1035,7 +1080,8 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        // Revoking synchronously can kill the download before it starts
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
     // ----------------------------------------------------------------------
@@ -1313,14 +1359,61 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
           });
         }
 
+        // A .zip is treated as a container of Qlik apps: its .qvf members are
+        // pulled out and ingested individually. Non-.qvf members are ignored and
+        // reported — nothing in an archive is assumed to be a QVF by position.
+        function expandArchives(selected) {
+            return Promise.all(selected.map((file) => {
+                if (!/\.zip$/i.test(file.name)) {
+                    return Promise.resolve({ files: [file], notes: [] });
+                }
+                if (typeof JSZip === "undefined") {
+                    return Promise.resolve({
+                        files: [],
+                        notes: [`${file.name}: JSZip is not loaded, so the archive could not be opened.`]
+                    });
+                }
+                return JSZip.loadAsync(file).then((zip) => {
+                    const members = [];
+                    zip.forEach((path, entry) => {
+                        if (!entry.dir && /\.qvf$/i.test(path)) members.push(entry);
+                    });
+                    if (!members.length) {
+                        return { files: [], notes: [`${file.name}: contains no .qvf file.`] };
+                    }
+                    return Promise.all(members.map((entry) =>
+                        entry.async("blob").then((blob) =>
+                            new File([blob], entry.name.split("/").pop(), { type: "application/octet-stream" })
+                        )
+                    )).then((files) => ({ files, notes: [] }));
+                }).catch(() => ({
+                    files: [],
+                    notes: [`${file.name}: could not be read as a .zip archive.`]
+                }));
+            })).then((results) => ({
+                files: results.reduce((acc, r) => acc.concat(r.files), []),
+                notes: results.reduce((acc, r) => acc.concat(r.notes), [])
+            }));
+        }
+
         fileInput.addEventListener("change", (e) => {
             const picked = Array.from(e.target.files || []);
             // Allow re-picking the same file(s) later
             e.target.value = "";
             if (!picked.length) return;
 
-            const batch = picked.slice(0, MAX_UPLOAD_FILES);
-            const skipped = picked.length - batch.length;
+            expandArchives(picked).then(({ files: expanded, notes: archiveNotes }) => {
+            // The 10-file cap applies to the expanded set, so a single archive
+            // holding 30 apps cannot slip past it.
+            const batch = expanded.slice(0, MAX_UPLOAD_FILES);
+            const skipped = expanded.length - batch.length;
+
+            if (!batch.length) {
+                alert(archiveNotes.length
+                    ? archiveNotes.join("\n")
+                    : "No .qvf file was found in the selection.");
+                return;
+            }
 
             Promise.all(batch.map(ingestQvfFile)).then((keys) => {
                 const loaded = keys.filter(Boolean);
@@ -1343,7 +1436,7 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                     }
                 }
 
-                const notes = [];
+                const notes = archiveNotes.slice();
                 if (skipped > 0) {
                     notes.push(`${skipped} file(s) beyond the ${MAX_UPLOAD_FILES}-file limit were not uploaded.`);
                 }
@@ -1351,6 +1444,7 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                     notes.push(`${failed} file(s) could not be read and were skipped.`);
                 }
                 if (notes.length) alert(notes.join("\n"));
+            });
             });
         });
     }

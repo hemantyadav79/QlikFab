@@ -94,17 +94,17 @@
                     <div class="migration-card primary-card">
                         <h2>Works with no Qlik connection.</h2>
                         
-                        <!-- HIDDEN FILE INPUT FOR BROWSE / UPLOAD FROM PC (UP TO 10 FILES AT ONCE) -->
-                        <input type="file" id="qvf-file-input" accept=".qvf" multiple style="display: none;">
+                        <!-- HIDDEN FILE INPUT FOR BROWSE / UPLOAD FROM PC (UP TO 10 FILES AT ONCE, .QVF OR .ZIP) -->
+                        <input type="file" id="qvf-file-input" accept=".qvf,.zip" multiple style="display: none;">
 
                         <!-- DROPZONE BOX CLICKABLE TO BROWSE FILES -->
-                        <div class="file-upload-box" id="dropzone" title="Click to browse & upload up to 10 .qvf files from your PC">
+                        <div class="file-upload-box" id="dropzone" title="Click to browse & upload up to 10 .qvf files (or .zip archives containing them) from your PC">
                             <i class="fa-solid fa-file-arrow-up"></i>
                             <div class="upload-label">
                                 <b id="dropzone-name">Helpdesk Management.qvf</b>
                                 <span id="dropzone-size">1.96 MB</span>
                             </div>
-                            <span class="remove-file" id="btn-browse-file" title="Browse & Upload up to 10 .QVF Files from your computer"><i class="fa-solid fa-folder-open"></i></span>
+                            <span class="remove-file" id="btn-browse-file" title="Browse & Upload up to 10 .QVF Files or .ZIP archives from your computer"><i class="fa-solid fa-folder-open"></i></span>
                         </div>
 
                         <div class="form-group">
@@ -382,6 +382,6 @@
         </main>
     </div>
 
-    <script src="script.js?v=20260804_multiupload_v9"></script>
+    <script src="script.js?v=20260804_zipupload_v11"></script>
 </body>
 </html>
