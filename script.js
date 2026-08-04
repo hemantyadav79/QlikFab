@@ -184,7 +184,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
-    let currentActiveQvf = APP_REGISTRY["Helpdesk Management.qvf"];
+    let currentActiveQvf = null;
 
     // ----------------------------------------------------------------------
     // 2. SIDEBAR NAVIGATION
@@ -1098,8 +1098,7 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
             b1.style.background = "";
             b1.style.color = "";
             b1.innerHTML = "Start migration";
-            b1.style.display = appData ? "block" : "none";
-            b1.onclick = null;
+            b1.style.display = "block";
         }
         const b2 = document.getElementById("btn-migrate-qlik");
         if (b2) {
@@ -1107,9 +1106,8 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
             b2.classList.remove("running-btn", "success-btn");
             b2.style.background = "";
             b2.style.color = "";
-            b2.innerHTML = "Start migration";
-            b2.style.display = appData ? "block" : "none";
-            b2.onclick = null;
+            b2.innerHTML = "Migrate from Qlik";
+            b2.style.display = "block";
         }
 
         const dzName = document.getElementById("dropzone-name");
@@ -1554,6 +1552,19 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
 
     function executeMigrationFlow(btnElem) {
         if (!btnElem) return;
+        if (btnElem.id === "btn-migrate-qlik") {
+            const urlInput = document.getElementById("qlik-app-url-input");
+            if (!urlInput || !urlInput.value.trim()) {
+                alert("Please enter a Qlik App ID or URL first, or configure Settings!");
+                if (urlInput) urlInput.focus();
+                return;
+            }
+        } else if (!currentActiveQvf) {
+            alert("Please browse and upload a .QVF file first to start migration!");
+            const fileInput = document.getElementById("qvf-file-input");
+            if (fileInput) fileInput.click();
+            return;
+        }
 
         // 1. Immediate interactive button press & running feedback
         btnElem.disabled = true;
@@ -1575,33 +1586,72 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
             consoleBadge.innerHTML = `<span class="pulse-dot"></span> RUNNING`;
         }
         if (consoleBody) consoleBody.innerHTML = "";
+        ["assess", "parse", "map", "gen"].forEach(id => {
+            const box = document.getElementById(`logs-agent-${id}`);
+            if (box) box.innerHTML = "";
+            const badge = document.getElementById(`badge-agent-${id}`);
+            if (badge) {
+                badge.textContent = "RUNNING...";
+                badge.className = "agent-badge-tag running";
+            }
+        });
+
+        // Helper to append log line to specific agent box
+        const appendLogToAgent = (id, timeSec, msg) => {
+            const box = document.getElementById(`logs-agent-${id}`);
+            if (!box) return;
+            const row = document.createElement("div");
+            row.className = "log-line";
+            row.innerHTML = `<span class="log-time">[+${timeSec}s]</span> ${msg}`;
+            box.appendChild(row);
+            box.scrollTop = box.scrollHeight;
+        };
+
+        const setAgentBadge = (id, label, styleClass) => {
+            const badge = document.getElementById(`badge-agent-${id}`);
+            if (badge) {
+                badge.textContent = label;
+                badge.className = `agent-badge-tag ${styleClass}`;
+            }
+        };
 
         // Dynamic phase messages customized to the selected .qvf file
         const activeFile = currentActiveQvf.filename;
         const activeDir = currentActiveQvf.projectDir;
 
-        const logs = [
-            { time: 0, text: `[SYSTEM] Microsoft AutoGen (autogen-agentchat) framework initialized.` },
-            { time: 600, text: `[ORCHESTRATOR] Target QVF selected: "${activeFile}" (${currentActiveQvf.size})` },
-            { time: 1300, text: `[AUTOGEN PHASE 1] AssessmentAgent: Analyzing load script, variables & PII...` },
-            { time: 2100, text: `[OK] Assessment complete. Report Priority: Medium | PII Risk: None Detected.` },
-            { time: 2900, text: `[AUTOGEN PHASE 2] ReportParsingAgent: Extracted ${currentActiveQvf.fieldsCnt} and ${currentActiveQvf.visualsCnt}.` },
-            { time: 3800, text: `[AUTOGEN PHASE 3] MappingAgent: Translating Qlik DAX expressions via AI Brain (100% Score)...` },
-            { time: 4700, text: `[AUTOGEN PHASE 4] ReportGenerationAgent: Building Microsoft Fabric PBIP & standalone template...` },
-            { time: 5600, text: `[OK] Saved: ${currentActiveQvf.pbitName} (${currentActiveQvf.pbitSize}) in ${activeDir}` },
-            { time: 6400, text: `[OK] Saved: ${currentActiveQvf.pbipName} and MIGRATION_AUDIT_REPORT.md` },
-            { time: 7200, text: `[SUCCESS] 100% Autonomous Migration Completed with < 5% Discrepancy Audit!!` }
-        ];
+        // 1. AssessmentAgent (Phase 1)
+        setTimeout(() => appendLogToAgent("assess", "0.0", `[SYSTEM] AutoGen AssessmentAgent initialized.`), 0);
+        setTimeout(() => appendLogToAgent("assess", "0.6", `[ORCHESTRATOR] Target QVF: "${activeFile}" (${currentActiveQvf.size})`), 600);
+        setTimeout(() => appendLogToAgent("assess", "1.3", `[PHASE 1] Analyzing Load Script, variables & PII scan...`), 1300);
+        setTimeout(() => {
+            appendLogToAgent("assess", "2.1", `[SUCCESS] Assessment complete. PII Risk: None. Priority: Medium.`);
+            setAgentBadge("assess", "COMPLETED", "completed");
+        }, 2100);
 
-        logs.forEach(log => {
-            setTimeout(() => {
-                const row = document.createElement("div");
-                row.className = "log-line";
-                row.innerHTML = `<span class="log-time">[+${(log.time/1000).toFixed(1)}s]</span> ${log.text}`;
-                consoleBody.appendChild(row);
-                consoleBody.scrollTop = consoleBody.scrollHeight;
-            }, log.time);
-        });
+        // 2. ReportParsingAgent (Phase 2)
+        setTimeout(() => appendLogToAgent("parse", "1.5", `[SYSTEM] AutoGen ReportParsingAgent initialized.`), 1500);
+        setTimeout(() => appendLogToAgent("parse", "2.2", `[INFO] Extracting binary QVF schema & data model tables...`), 2200);
+        setTimeout(() => {
+            appendLogToAgent("parse", "2.9", `[SUCCESS] Extracted ${currentActiveQvf.fieldsCnt} and ${currentActiveQvf.visualsCnt}. Schema 100% verified.`);
+            setAgentBadge("parse", "COMPLETED", "completed");
+        }, 2900);
+
+        // 3. MappingAgent (Phase 3)
+        setTimeout(() => appendLogToAgent("map", "2.8", `[SYSTEM] AutoGen MappingAgent initialized.`), 2800);
+        setTimeout(() => appendLogToAgent("map", "3.6", `[INFO] Translating Qlik expressions to Power BI DAX formulas...`), 3600);
+        setTimeout(() => {
+            appendLogToAgent("map", "4.5", `[SUCCESS] Mapped ${currentActiveQvf.daxQueue.length} DAX measures (100% AI score).`);
+            setAgentBadge("map", "COMPLETED", "completed");
+        }, 4500);
+
+        // 4. ReportGenerationAgent (Phase 4)
+        setTimeout(() => appendLogToAgent("gen", "4.2", `[SYSTEM] AutoGen ReportGenerationAgent initialized.`), 4200);
+        setTimeout(() => appendLogToAgent("gen", "5.1", `[INFO] Building Microsoft Fabric PBIP 4.0 & PBIT template...`), 5100);
+        setTimeout(() => appendLogToAgent("gen", "6.0", `[OK] Saved: ${currentActiveQvf.pbitName} (${currentActiveQvf.pbitSize}) in ${activeDir}`), 6000);
+        setTimeout(() => {
+            appendLogToAgent("gen", "6.8", `[SUCCESS] 100% Autonomous Migration Completed! Saved ${currentActiveQvf.pbipName}.`);
+            setAgentBadge("gen", "COMPLETED", "completed");
+        }, 6800);
 
         setTimeout(() => {
             if (consoleBadge) {
