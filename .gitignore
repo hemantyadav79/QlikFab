@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Generated Power BI & Migration Archives
+*_PowerBI_Project/
+*_AI_PowerBI/
+*.pbix
+*.pbip_test/
+*.zip
+*.log
+extracted_result/

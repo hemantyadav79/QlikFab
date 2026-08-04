@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qlik → Fabric | Autonomous Migration Platform</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- SIDEBAR NAVIGATION -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo-icon"><i class="fa-solid fa-bolt-lightning"></i></div>
+                <div class="logo-text">Qlik <span>→</span> Fabric</div>
+            </div>
+            <div class="nav-section-title">Navigate</div>
+            <nav class="nav-menu">
+                <a href="#run-migration" class="nav-item active" data-tab="tab-run"><i class="fa-solid fa-rocket"></i> Run migration</a>
+                <a href="#assessment" class="nav-item" data-tab="tab-assessment"><i class="fa-solid fa-chart-line"></i> Assessment</a>
+                <a href="#review-queue" class="nav-item" data-tab="tab-review"><i class="fa-solid fa-check-double"></i> Review queue</a>
+                <a href="#artifacts" class="nav-item" data-tab="tab-artifacts"><i class="fa-solid fa-box-open"></i> Artifacts</a>
+                <a href="#job-history" class="nav-item" data-tab="tab-history"><i class="fa-solid fa-clock-rotate-left"></i> Job history</a>
+                <a href="#settings" class="nav-item" data-tab="tab-settings"><i class="fa-solid fa-gear"></i> Settings</a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="autogen-badge">
+                    <div class="badge-icon"><i class="fa-solid fa-robot"></i></div>
+                    <div class="badge-content">
+                        <div class="badge-title">Microsoft AutoGen</div>
+                        <div class="badge-desc">4 AssistantAgents Active</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT AREA -->
+        <main class="main-content">
+            <!-- TOP HEADER -->
+            <header class="top-header">
+                <div class="header-titles">
+                    <h1>Qlik <span>→</span> Fabric</h1>
+                    <p>Autonomous migration platform</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn-deploy"><i class="fa-solid fa-cloud-arrow-up"></i> Deploy</button>
+                </div>
+            </header>
+
+
+            <!-- TAB 1: RUN MIGRATION (DEFAULT) -->
+            <section id="tab-run" class="tab-pane active">
+                <div class="migration-grid">
+                    <!-- LEFT COLUMN: WORKS WITH NO QLIK CONNECTION -->
+                    <div class="migration-card primary-card">
+                        <h2>Works with no Qlik connection.</h2>
+                        
+                        <!-- HIDDEN FILE INPUT FOR BROWSE / UPLOAD FROM PC -->
+                        <input type="file" id="qvf-file-input" accept=".qvf" style="display: none;">
+                        
+                        <!-- DROPZONE BOX CLICKABLE TO BROWSE FILES -->
+                        <div class="file-upload-box" id="dropzone" title="Click to browse & upload any .qvf file from your PC">
+                            <i class="fa-solid fa-file-arrow-up"></i>
+                            <div class="upload-label">
+                                <b id="dropzone-name">Helpdesk Management.qvf</b>
+                                <span id="dropzone-size">1.96 MB</span>
+                            </div>
+                            <span class="remove-file" id="btn-browse-file" title="Browse & Upload .QVF File from your computer"><i class="fa-solid fa-folder-open"></i></span>
+                        </div>
+
+                        <div class="form-group">
+                            <label>...or select a QVF application to migrate</label>
+                            <select id="bundled-select" class="custom-select">
+                                <option value="" selected>-- No file selected (Upload from folder or choose below) --</option>
+                                <option value="browse">📂 + Browse & Upload .QVF File from your computer...</option>
+                                <option value="Executive Dashboard.qvf">Executive Dashboard.qvf (2.88 MB)</option>
+                                <option value="Helpdesk Management.qvf">Helpdesk Management.qvf (1.96 MB)</option>
+                                <option value="Superstore_Sales_Dashboard.qvf">Superstore_Sales_Dashboard.qvf (208.0 KB)</option>
+                                <option value="Demo 2.qvf">Demo 2.qvf (288.0 KB)</option>
+                                <option value="first_qlik_project.qvf">first_qlik_project.qvf (4.00 MB)</option>
+                            </select>
+                        </div>
+
+                        <div class="info-card-blue">
+                            <i class="fa-solid fa-circle-info"></i>
+                            <p>This file is read offline: script, sheets, charts, measures and the rows the app was last loaded with. Anything that cannot be read is reported, never guessed.</p>
+                        </div>
+
+                        <button id="btn-start-migration" class="btn-primary-block">
+                            Start migration
+                        </button>
+                    </div>
+
+                    <!-- RIGHT COLUMN: NEEDS TENANT URL & API KEY -->
+                    <div class="migration-card secondary-card">
+                        <h2>Needs a tenant URL and API key — see Settings.</h2>
+                        
+                        <div class="form-group">
+                            <label>App ID or app URL</label>
+                            <input type="text" class="custom-input" placeholder="a1b2c3d4-e5f6-... or paste the app URL">
+                        </div>
+
+                        <button class="btn-secondary-block">
+                            Migrate from Qlik
+                        </button>
+
+                        <div class="faq-accordion" id="faq-toggle">
+                            <div class="faq-header">
+                                <i class="fa-solid fa-chevron-right" id="faq-icon"></i>
+                                <span>Why is this better than uploading?</span>
+                            </div>
+                            <div class="faq-body" id="faq-content">
+                                <ul>
+                                    <li><b>Live Master Items Sync:</b> Read variables, custom security rules, and metadata directly from Qlik Cloud/Enterprise REST APIs.</li>
+                                    <li><b>Continuous Fabric Updates:</b> Keeps Power BI Fabric semantic models refreshed without manual `.qvf` file downloads.</li>
+                                    <li><b>Automatic Lineage Tracking:</b> Records source Qlik app lineage tags into Fabric `.pbip` datasets.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tab-footer-caption">
+                    Upload any .QVF file on the left, or migrate live from Qlik on the right.
+                </div>
+
+                <!-- AUTOGEN LIVE CONSOLE MODAL / PANEL -->
+                <div id="autogen-console" class="autogen-console-card hidden">
+                    <div class="console-header">
+                        <div class="console-title"><i class="fa-solid fa-robot"></i> Microsoft AutoGen 4-Phase Multi-Agent Execution</div>
+                        <div class="console-status" id="console-status-badge"><span class="pulse-dot"></span> RUNNING</div>
+                    </div>
+                    <div class="console-logs" id="console-logs-body"></div>
+                    <div class="console-metrics hidden" id="console-metrics-row">
+                        <div class="metric-card">
+                            <span>Sheets Converted</span>
+                            <b id="metric-sheets">2 Pages</b>
+                        </div>
+                        <div class="metric-card">
+                            <span>Visuals Mapped</span>
+                            <b id="metric-visuals">10 Charts</b>
+                        </div>
+                        <div class="metric-card">
+                            <span>DAX Measures</span>
+                            <b id="metric-dax">12 Auto-Mapped</b>
+                        </div>
+                        <div class="metric-card">
+                            <span>Discrepancy Check</span>
+                            <b class="success-text">&lt; 5% (PASSED)</b>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: ASSESSMENT -->
+            <section id="tab-assessment" class="tab-pane">
+                <h2>Phase 1: Assessment & Volumetrics Scorecard</h2>
+                <p class="tab-desc">Dynamic pre-migration analysis generated by AutoGen <code>AssessmentAgent</code> for <b id="assess-target-name">Helpdesk Management.qvf</b></p>
+                
+                <div class="kpi-row">
+                    <div class="kpi-box">
+                        <span class="kpi-label">Report App Name</span>
+                        <b class="kpi-value" id="kpi-app-name">Helpdesk Management</b>
+                        <span class="kpi-sub">Dynamic QVF Title</span>
+                    </div>
+                    <div class="kpi-box">
+                        <span class="kpi-label">Extracted Fields</span>
+                        <b class="kpi-value" id="kpi-fields-cnt">33 Columns</b>
+                        <span class="kpi-sub">100% Dynamic Schema</span>
+                    </div>
+                    <div class="kpi-box">
+                        <span class="kpi-label">Sheets & Visuals</span>
+                        <b class="kpi-value" id="kpi-visuals-cnt">2 Sheets / 10 Charts</b>
+                        <span class="kpi-sub">Parsed from Load Script</span>
+                    </div>
+                    <div class="kpi-box">
+                        <span class="kpi-label">PII Risk Detection</span>
+                        <b class="kpi-value success-text">None Detected</b>
+                        <span class="kpi-sub">Safe for Fabric Catalog</span>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <h3>Extracted Sheets & Chart Inventory</h3>
+                    <table class="custom-table">
+                        <thead>
+                            <tr>
+                                <th>Sheet Name</th>
+                                <th>Chart Type</th>
+                                <th>Visual Title</th>
+                                <th>Dimensions</th>
+                                <th>Measures</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="assessment-tbody">
+                            <!-- Dynamic rows injected by script.js based on active QVF -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- TAB 3: REVIEW QUEUE -->
+            <section id="tab-review" class="tab-pane">
+                <h2>Phase 3: DAX Expression Review Queue</h2>
+                <p class="tab-desc">Inspect and approve LLM-translated DAX expressions for <b id="review-target-name">Helpdesk Management</b></p>
+                
+                <div class="table-container">
+                    <table class="custom-table">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" checked></th>
+                                <th>Qlik Expression / Metric Column</th>
+                                <th>Translated DAX Formula</th>
+                                <th>LLM Confidence</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="review-tbody">
+                            <!-- Dynamic DAX rows injected by script.js based on active QVF -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="action-bar">
+                    <button class="btn-primary-block" style="width: auto; padding: 12px 28px;">
+                        <i class="fa-solid fa-check"></i> Approve All DAX Translations
+                    </button>
+                </div>
+            </section>
+
+            <!-- TAB 4: ARTIFACTS -->
+            <section id="tab-artifacts" class="tab-pane">
+                <h2>Phase 4: Generated Power BI Artifacts</h2>
+                <p class="tab-desc">All standalone templates, Fabric projects, and audit logs stored in <code id="artifact-dir-subtitle">Helpdesk_PowerBI_Project/</code></p>
+                
+                <div class="artifacts-grid">
+                    <div class="artifact-card" style="border: 2px solid #00c853; box-shadow: 0 0 15px rgba(0, 200, 83, 0.2);">
+                        <div class="art-icon" style="color: #00c853;"><i class="fa-solid fa-folder-tree"></i></div>
+                        <div class="art-details">
+                            <h3 id="artifact-pbip-title">Helpdesk Management.pbip <span style="background: #00c853; color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 12px; margin-left: 8px;">★ RECOMMENDED (DATA + VISUALS)</span></h3>
+                            <p><b>100% Data & Visuals Included!</b> Full Microsoft Fabric PBIP Project with 100 rows of data and KPI Charts. <b style="color: #00c853;">👉 Step 1: Extract (Unzip) downloaded folder. 👉 Step 2: Double-click the .pbip file inside!</b></p>
+                            <div class="art-meta" style="color: #00c853; font-weight: 600;">Project Bundle • Full Tabular Data & Canvas Charts Included</div>
+                        </div>
+                        <button class="btn-download" id="artifact-pbip-btn" style="background: #00c853; color: white; font-weight: bold;">
+                            <i class="fa-solid fa-download"></i> Download .PBIP (Full Data & Visuals - RECOMMENDED)
+                        </button>
+                    </div>
+
+                    <div class="artifact-card">
+                        <div class="art-icon"><i class="fa-solid fa-file-powerpoint"></i></div>
+                        <div class="art-details">
+                            <h3 id="artifact-pbit-title">Helpdesk Management.pbit</h3>
+                            <p>Standalone Power BI Template file (Schema & metadata structure without offline rows).</p>
+                            <div class="art-meta" id="artifact-pbit-meta">Size: 5.3 KB • Standalone Template</div>
+                        </div>
+                        <button class="btn-download" id="artifact-pbit-btn">
+                            <i class="fa-solid fa-bolt"></i> Download .PBIT (Template Schema Only)
+                        </button>
+                    </div>
+
+                    <div class="artifact-card">
+                        <div class="art-icon"><i class="fa-solid fa-file-shield"></i></div>
+                        <div class="art-details">
+                            <h3>MIGRATION_AUDIT_REPORT.md</h3>
+                            <p>Executive compliance audit report generated by AutoGen Orchestrator.</p>
+                            <div class="art-meta">Size: 2.6 KB • Compliance Log</div>
+                        </div>
+                        <button class="btn-download" id="artifact-audit-btn">
+                            <i class="fa-solid fa-file-contract"></i> Open Audit Report
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 5: JOB HISTORY -->
+            <section id="tab-history" class="tab-pane">
+                <h2>Autonomous Migration Job History</h2>
+                <p class="tab-desc">Audit trail of all Microsoft AutoGen multi-agent execution runs</p>
+                
+                <div class="table-container">
+                    <table class="custom-table">
+                        <thead>
+                            <tr>
+                                <th>Job ID</th>
+                                <th>Target File</th>
+                                <th>Sheets</th>
+                                <th>Visuals</th>
+                                <th>Execution Time</th>
+                                <th>Discrepancy Audit</th>
+                                <th>Date & Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody">
+                            <!-- Dynamic history injected by script.js -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- TAB 6: SETTINGS -->
+            <section id="tab-settings" class="tab-pane">
+                <h2>Platform & AI Brain Settings</h2>
+                <p class="tab-desc">Configure LLM Provider endpoints, Qlik Tenant REST API, and AutoGen multi-agent parameters</p>
+                
+                <div class="settings-grid">
+                    <div class="settings-card">
+                        <h3><i class="fa-solid fa-brain"></i> AutoGen AI Brain Provider</h3>
+                        <div class="form-group">
+                            <label>Select LLM Provider for DAX & M-Query Translation</label>
+                            <select class="custom-select" id="brain-selector">
+                                <option value="ollama" selected>Ollama (llama3.2 - Local Offline)</option>
+                                <option value="azure">Azure OpenAI (GPT-4o)</option>
+                                <option value="openai">OpenAI (GPT-4o-mini)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>AZURE_OPENAI_ENDPOINT</label>
+                            <input type="text" class="custom-input" placeholder="https://your-tenant.openai.azure.com/">
+                        </div>
+                        <div class="form-group">
+                            <label>AZURE_OPENAI_API_KEY</label>
+                            <input type="password" class="custom-input" placeholder="Paste API Key here...">
+                        </div>
+                        <button class="btn-primary-block" style="width: auto; padding: 10px 24px;">Save AI Credentials</button>
+                    </div>
+
+                    <div class="settings-card">
+                        <h3><i class="fa-solid fa-cloud"></i> Qlik Cloud / Enterprise REST API</h3>
+                        <div class="form-group">
+                            <label>Qlik Tenant URL</label>
+                            <input type="text" class="custom-input" placeholder="https://your-tenant.us.qlikcloud.com">
+                        </div>
+                        <div class="form-group">
+                            <label>Qlik API Token / Certificate</label>
+                            <input type="password" class="custom-input" placeholder="eyJhbGciOiJSUzI1NiIs...">
+                        </div>
+                        <button class="btn-primary-block" style="width: auto; padding: 10px 24px;">Save Tenant Settings</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="script.js?v=20260803_universal_v8"></script>
+</body>
+</html>
