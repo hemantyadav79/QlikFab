@@ -453,38 +453,7 @@ h1, h2, h3, h4 {
 /* Header Back control. Sits level with the title block rather than above it,
    so the header keeps a single baseline whether or not it is showing. */
 .btn-back {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 8px;
-    padding: 9px 16px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-pill);
-    background: var(--bg-card);
-    color: var(--text-sub);
-    font-family: var(--font-main);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-    box-shadow: var(--shadow-sm);
-    transition: background-color var(--transition-fast),
-                color var(--transition-fast),
-                border-color var(--transition-fast),
-                box-shadow var(--transition-fast),
-                transform var(--transition-fast);
-}
-
-.btn-back:hover {
-    background: var(--bg-card-hover);
-    color: var(--accent);
-    border-color: var(--accent-ring);
-    box-shadow: var(--shadow-md);
-    transform: translateX(-2px);
-}
-
-.btn-back[hidden] {
-    display: none;
+    display: none !important;
 }
 
 /* In-pane back link — quieter than the header control, since it retreats one
