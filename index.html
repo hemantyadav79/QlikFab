@@ -25,7 +25,7 @@
         })();
     </script>
 
-    <link rel="stylesheet" href="styles.css?v=20260804_agent_subtabs_v1">
+    <link rel="stylesheet" href="styles.css?v=20260805_multiselect_v1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -44,8 +44,42 @@
             <div class="nav-section-title">Navigate</div>
             <nav class="nav-menu">
                 <a href="#run-migration" class="nav-item active" data-tab="tab-run"><i class="fa-solid fa-rocket"></i> Run migration</a>
-                <a href="#assessment" class="nav-item" data-tab="tab-assessment"><i class="fa-solid fa-chart-line"></i> Assessment</a>
-                <a href="#review-queue" class="nav-item" data-tab="tab-review"><i class="fa-solid fa-check-double"></i> Review queue</a>
+
+                <!--
+                  Agents is a group, not a leaf: opening it reveals one sub-item per
+                  AutoGen agent. The sub-items drive the panes inside #tab-agents.
+                -->
+                <div class="nav-group" id="nav-group-agents">
+                    <a href="#agents" class="nav-item nav-item-parent" data-tab="tab-agents"
+                       aria-expanded="false" aria-controls="nav-submenu-agents">
+                        <i class="fa-solid fa-robot"></i>
+                        <span class="nav-item-label">Agents</span>
+                        <i class="fa-solid fa-chevron-down nav-caret" aria-hidden="true"></i>
+                    </a>
+                    <div class="nav-submenu" id="nav-submenu-agents" role="tablist">
+                        <a href="#agent-assessment" class="nav-subitem" data-subtab="sub-agent-assess" role="tab" aria-selected="false">
+                            <span class="nav-subdot" style="background: #3b82f6;"></span>
+                            <span class="nav-subitem-label">Assessment</span>
+                            <span class="nav-agent-state" id="nav-state-assess">idle</span>
+                        </a>
+                        <a href="#agent-parsing" class="nav-subitem" data-subtab="sub-agent-parse" role="tab" aria-selected="false">
+                            <span class="nav-subdot" style="background: #06b6d4;"></span>
+                            <span class="nav-subitem-label">Parsing</span>
+                            <span class="nav-agent-state" id="nav-state-parse">idle</span>
+                        </a>
+                        <a href="#agent-mapping" class="nav-subitem" data-subtab="sub-agent-map" role="tab" aria-selected="false">
+                            <span class="nav-subdot" style="background: #8b5cf6;"></span>
+                            <span class="nav-subitem-label">Mapping</span>
+                            <span class="nav-agent-state" id="nav-state-map">idle</span>
+                        </a>
+                        <a href="#agent-report-generation" class="nav-subitem" data-subtab="sub-agent-gen" role="tab" aria-selected="false">
+                            <span class="nav-subdot" style="background: #10b981;"></span>
+                            <span class="nav-subitem-label">Report generation</span>
+                            <span class="nav-agent-state" id="nav-state-gen">idle</span>
+                        </a>
+                    </div>
+                </div>
+
                 <a href="#artifacts" class="nav-item" data-tab="tab-artifacts"><i class="fa-solid fa-box-open"></i> Artifacts</a>
                 <a href="#job-history" class="nav-item" data-tab="tab-history"><i class="fa-solid fa-clock-rotate-left"></i> Job history</a>
             </nav>
@@ -66,9 +100,17 @@
         <main class="main-content">
             <!-- TOP HEADER -->
             <header class="top-header">
-                <div class="header-titles">
-                    <h1>Qlik <span>→</span> Fabric</h1>
-                    <p>Autonomous migration platform</p>
+                <div class="header-lead">
+                    <!-- Steps back through the views this session actually visited;
+                         hidden until there is somewhere to go back to. -->
+                    <button type="button" class="btn-back" id="btn-global-back" hidden>
+                        <i class="fa-solid fa-arrow-left" aria-hidden="true"></i>
+                        <span class="btn-back-label">Back</span>
+                    </button>
+                    <div class="header-titles">
+                        <h1>Qlik <span>→</span> Fabric</h1>
+                        <p>Autonomous migration platform</p>
+                    </div>
                 </div>
                 <div class="header-actions">
                     <div class="theme-toggle" role="group" aria-label="Colour theme">
@@ -117,7 +159,7 @@
                 <div class="mode-bar hidden" id="mode-bar">
                     <span class="mode-bar-label">Source: <b id="mode-bar-name">—</b></span>
                     <button type="button" class="btn-link" id="btn-change-mode">
-                        <i class="fa-solid fa-arrow-left"></i> Change source
+                        <i class="fa-solid fa-arrow-left"></i> Back to source choice
                     </button>
                 </div>
 
@@ -169,10 +211,21 @@
                         </button>
 
                         <div id="qlik-apps-container" class="form-group" style="display: none;">
-                            <label>Select App to Migrate</label>
-                            <select id="qlik-app-select" class="custom-input">
-                                <option value="">Select an app...</option>
-                            </select>
+                            <label>Select apps to migrate</label>
+                            <!-- Multi-select: each chosen app becomes its own PBIP project,
+                                 the same way a multi-file .qvf upload does. No placeholder
+                                 option — an unselectable prompt has no meaning in a list. -->
+                            <select id="qlik-app-select" class="custom-input custom-multiselect" multiple size="8"></select>
+                            <div class="select-toolbar">
+                                <span class="select-count" id="qlik-app-count">No apps selected</span>
+                                <span class="select-actions">
+                                    <button type="button" class="btn-link" id="btn-select-all-apps">Select all</button>
+                                    <button type="button" class="btn-link" id="btn-clear-apps">Clear</button>
+                                </span>
+                            </div>
+                            <p class="form-hint">
+                                Ctrl-click (&#8984;-click on Mac) to pick several, or Shift-click for a range.
+                            </p>
                         </div>
 
                         <!-- Destination in Microsoft Fabric. Recorded with the run and
@@ -246,7 +299,7 @@
                         </div>
 
                         <button id="btn-migrate-qlik" class="btn-secondary-block" style="display: none;">
-                            Migrate Selected App
+                            Migrate Selected Apps
                         </button>
                     </div>
                 </div>
@@ -344,114 +397,12 @@
                 </div>
             </section>
 
-            <!-- TAB 2: ASSESSMENT -->
-            <section id="tab-assessment" class="tab-pane">
-                <h2>Phase 1: Assessment & Volumetrics Scorecard</h2>
-                <p class="tab-desc">Dynamic pre-migration analysis generated by AutoGen <code>AssessmentAgent</code> for <b id="assess-target-name">Helpdesk Management.qvf</b></p>
-                
-                <div class="kpi-row">
-                    <div class="kpi-box">
-                        <span class="kpi-label">Report App Name</span>
-                        <b class="kpi-value" id="kpi-app-name">Helpdesk Management</b>
-                        <span class="kpi-sub">Dynamic QVF Title</span>
-                    </div>
-                    <div class="kpi-box">
-                        <span class="kpi-label">Extracted Fields</span>
-                        <b class="kpi-value" id="kpi-fields-cnt">33 Columns</b>
-                        <span class="kpi-sub">100% Dynamic Schema</span>
-                    </div>
-                    <div class="kpi-box">
-                        <span class="kpi-label">Sheets & Visuals</span>
-                        <b class="kpi-value" id="kpi-visuals-cnt">2 Sheets / 10 Charts</b>
-                        <span class="kpi-sub" id="kpi-visuals-sub">Parsed from Load Script</span>
-                    </div>
-                    <div class="kpi-box">
-                        <span class="kpi-label">PII Risk Detection</span>
-                        <b class="kpi-value success-text" id="kpi-pii-value">None flagged</b>
-                        <span class="kpi-sub" id="kpi-pii-sub">Column-name scan</span>
-                    </div>
-                </div>
-
-                <div class="table-container">
-                    <h3>Extracted Sheets & Chart Inventory</h3>
-                    <table class="custom-table">
-                        <thead>
-                            <tr>
-                                <th>Sheet Name</th>
-                                <th>Chart Type</th>
-                                <th>Visual Title</th>
-                                <th>Dimensions</th>
-                                <th>Measures</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="assessment-tbody">
-                            <!-- Dynamic rows injected by script.js based on active QVF -->
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- TAB 3: REVIEW QUEUE -->
-            <section id="tab-review" class="tab-pane">
-                <h2>Phase 3: DAX Expression Review Queue</h2>
-                <p class="tab-desc">Inspect and approve LLM-translated DAX expressions for <b id="review-target-name">Helpdesk Management</b></p>
-                
-                <div class="table-container">
-                    <table class="custom-table">
-                        <thead>
-                            <tr>
-                                <th><input type="checkbox" checked></th>
-                                <th>Qlik Expression / Metric Column</th>
-                                <th>Translated DAX Formula</th>
-                                <th>LLM Confidence</th>
-                                <th>Status</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody id="review-tbody">
-                            <!-- Dynamic DAX rows injected by script.js based on active QVF -->
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="action-bar">
-                    <button class="btn-primary-block" style="width: auto; padding: 12px 28px;">
-                        <i class="fa-solid fa-check"></i> Approve All DAX Translations
-                    </button>
-                </div>
-            </section>
-
-            <!-- TAB 4: ARTIFACTS -->
+            <!-- TAB: ARTIFACTS -->
             <section id="tab-artifacts" class="tab-pane">
                 <h2>Phase 4: Generated Power BI Artifacts</h2>
                 <p class="tab-desc">All standalone templates, Fabric projects, and audit logs stored in <code id="artifact-dir-subtitle">Helpdesk_PowerBI_Project/</code></p>
-                
-                <!-- Horizontal sub-tab strip: downloads first, then one tab per agent. -->
-                <div class="subtab-bar" role="tablist">
-                    <button type="button" class="subtab active" data-subtab="sub-downloads" role="tab" aria-selected="true">
-                        <i class="fa-solid fa-box-open"></i> Downloads
-                    </button>
-                    <button type="button" class="subtab" data-subtab="sub-agent-assess" role="tab" aria-selected="false">
-                        <i class="fa-solid fa-user-shield" style="color: #3b82f6;"></i> AssessmentAgent
-                        <span class="nav-agent-state" id="nav-state-assess">idle</span>
-                    </button>
-                    <button type="button" class="subtab" data-subtab="sub-agent-parse" role="tab" aria-selected="false">
-                        <i class="fa-solid fa-diagram-project" style="color: #06b6d4;"></i> ReportParsingAgent
-                        <span class="nav-agent-state" id="nav-state-parse">idle</span>
-                    </button>
-                    <button type="button" class="subtab" data-subtab="sub-agent-map" role="tab" aria-selected="false">
-                        <i class="fa-solid fa-brain" style="color: #8b5cf6;"></i> MappingAgent
-                        <span class="nav-agent-state" id="nav-state-map">idle</span>
-                    </button>
-                    <button type="button" class="subtab" data-subtab="sub-agent-gen" role="tab" aria-selected="false">
-                        <i class="fa-solid fa-boxes-packing" style="color: #10b981;"></i> ReportGenerationAgent
-                        <span class="nav-agent-state" id="nav-state-gen">idle</span>
-                    </button>
-                </div>
 
-                <!-- DOWNLOADS SUB-TAB -->
-                <div id="sub-downloads" class="subtab-pane active">
+                <div class="artifacts-downloads">
                     <!-- Nothing is downloadable until a run has actually produced it. -->
                     <div class="agent-empty-state" id="artifacts-empty-state">
                         <i class="fa-solid fa-box-open"></i>
@@ -499,16 +450,83 @@
                     </div>
                 </div>
 
-                <!--
-                  AGENT SUB-TABS — horizontal strip inside Artifacts.
-                  One pane per AutoGen agent. The shells below are static; the KPI row,
-                  the detail tables and the log stream are rendered by script.js from the
-                  same registry the migration run uses, so an agent tab never claims more
-                  than the uploaded .qvf files actually provide.
-                -->
+            </section>
 
-                <!-- AGENT SUB-TAB: ASSESSMENTAGENT -->
+            <!--
+              TAB: AGENTS
+              Reached from the Agents group in the sidebar. The overview below is the
+              landing pane; the four detail panes are opened from the sidebar sub-items
+              or from the overview cards. The shells are static — the KPI row, the
+              detail tables and the log stream are rendered by script.js from the same
+              registry the migration run uses, so an agent pane never claims more than
+              the uploaded .qvf files actually provide.
+            -->
+            <section id="tab-agents" class="tab-pane">
+                <!-- AGENTS OVERVIEW (landing pane for the group) -->
+                <div id="sub-agents-overview" class="subtab-pane active">
+                    <h2>Microsoft AutoGen Agents</h2>
+                    <p class="tab-desc">Four autonomous <code>AssistantAgents</code> run the migration end to end. Open one to see its KPIs, output tables and live execution log.</p>
+
+                    <div class="agent-card-grid">
+                        <button type="button" class="agent-card" data-subtab="sub-agent-assess">
+                            <span class="agent-live-avatar agent-card-avatar" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fa-solid fa-user-shield"></i></span>
+                            <span class="agent-card-body">
+                                <span class="agent-card-phase">Phase 1</span>
+                                <span class="agent-card-title">Assessment</span>
+                                <span class="agent-card-desc">Load-script analysis, volumetrics &amp; PII audit</span>
+                            </span>
+                            <span class="agent-card-foot">
+                                <span class="nav-agent-state" id="card-state-assess">idle</span>
+                                <span class="agent-card-go">Open <i class="fa-solid fa-arrow-right"></i></span>
+                            </span>
+                        </button>
+
+                        <button type="button" class="agent-card" data-subtab="sub-agent-parse">
+                            <span class="agent-live-avatar agent-card-avatar" style="background: linear-gradient(135deg, #06b6d4, #0891b2);"><i class="fa-solid fa-diagram-project"></i></span>
+                            <span class="agent-card-body">
+                                <span class="agent-card-phase">Phase 2</span>
+                                <span class="agent-card-title">Parsing</span>
+                                <span class="agent-card-desc">Binary QVF schema, data model &amp; sheet volumetrics</span>
+                            </span>
+                            <span class="agent-card-foot">
+                                <span class="nav-agent-state" id="card-state-parse">idle</span>
+                                <span class="agent-card-go">Open <i class="fa-solid fa-arrow-right"></i></span>
+                            </span>
+                        </button>
+
+                        <button type="button" class="agent-card" data-subtab="sub-agent-map">
+                            <span class="agent-live-avatar agent-card-avatar" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);"><i class="fa-solid fa-brain"></i></span>
+                            <span class="agent-card-body">
+                                <span class="agent-card-phase">Phase 3</span>
+                                <span class="agent-card-title">Mapping</span>
+                                <span class="agent-card-desc">Qlik expression &rarr; DAX translation and visual mapping</span>
+                            </span>
+                            <span class="agent-card-foot">
+                                <span class="nav-agent-state" id="card-state-map">idle</span>
+                                <span class="agent-card-go">Open <i class="fa-solid fa-arrow-right"></i></span>
+                            </span>
+                        </button>
+
+                        <button type="button" class="agent-card" data-subtab="sub-agent-gen">
+                            <span class="agent-live-avatar agent-card-avatar" style="background: linear-gradient(135deg, #10b981, #047857);"><i class="fa-solid fa-boxes-packing"></i></span>
+                            <span class="agent-card-body">
+                                <span class="agent-card-phase">Phase 4</span>
+                                <span class="agent-card-title">Report generation</span>
+                                <span class="agent-card-desc">Microsoft Fabric PBIP / PBIT artifact builder</span>
+                            </span>
+                            <span class="agent-card-foot">
+                                <span class="nav-agent-state" id="card-state-gen">idle</span>
+                                <span class="agent-card-go">Open <i class="fa-solid fa-arrow-right"></i></span>
+                            </span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- AGENT PANE: ASSESSMENTAGENT -->
                 <div id="sub-agent-assess" class="subtab-pane agent-detail-pane">
+                    <button type="button" class="btn-back-inline" data-subtab="sub-agents-overview">
+                        <i class="fa-solid fa-arrow-left"></i> All agents
+                    </button>
                     <div class="agent-detail-head">
                         <div class="agent-detail-identity">
                             <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fa-solid fa-user-shield"></i></div>
@@ -535,8 +553,11 @@
                     </div>
                 </div>
 
-                <!-- AGENT SUB-TAB: REPORTPARSINGAGENT -->
+                <!-- AGENT PANE: REPORTPARSINGAGENT -->
                 <div id="sub-agent-parse" class="subtab-pane agent-detail-pane">
+                    <button type="button" class="btn-back-inline" data-subtab="sub-agents-overview">
+                        <i class="fa-solid fa-arrow-left"></i> All agents
+                    </button>
                     <div class="agent-detail-head">
                         <div class="agent-detail-identity">
                             <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #06b6d4, #0891b2);"><i class="fa-solid fa-diagram-project"></i></div>
@@ -563,8 +584,11 @@
                     </div>
                 </div>
 
-                <!-- AGENT SUB-TAB: MAPPINGAGENT -->
+                <!-- AGENT PANE: MAPPINGAGENT -->
                 <div id="sub-agent-map" class="subtab-pane agent-detail-pane">
+                    <button type="button" class="btn-back-inline" data-subtab="sub-agents-overview">
+                        <i class="fa-solid fa-arrow-left"></i> All agents
+                    </button>
                     <div class="agent-detail-head">
                         <div class="agent-detail-identity">
                             <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);"><i class="fa-solid fa-brain"></i></div>
@@ -591,8 +615,11 @@
                     </div>
                 </div>
 
-                <!-- AGENT SUB-TAB: REPORTGENERATIONAGENT -->
+                <!-- AGENT PANE: REPORTGENERATIONAGENT -->
                 <div id="sub-agent-gen" class="subtab-pane agent-detail-pane">
+                    <button type="button" class="btn-back-inline" data-subtab="sub-agents-overview">
+                        <i class="fa-solid fa-arrow-left"></i> All agents
+                    </button>
                     <div class="agent-detail-head">
                         <div class="agent-detail-identity">
                             <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #10b981, #047857);"><i class="fa-solid fa-boxes-packing"></i></div>
@@ -620,7 +647,7 @@
                 </div>
             </section>
 
-            <!-- TAB 5: JOB HISTORY -->
+            <!-- TAB: JOB HISTORY -->
             <section id="tab-history" class="tab-pane">
                 <h2>Autonomous Migration Job History</h2>
                 <p class="tab-desc">Audit trail of all Microsoft AutoGen multi-agent execution runs</p>
@@ -634,7 +661,6 @@
                                 <th>Sheets</th>
                                 <th>Visuals</th>
                                 <th>Execution Time</th>
-                                <th>Discrepancy Audit</th>
                                 <th>Date & Time</th>
                             </tr>
                         </thead>
@@ -648,6 +674,6 @@
         </main>
     </div>
 
-    <script src="script.js?v=20260804_agent_subtabs_v1"></script>
+    <script src="script.js?v=20260805_multiselect_v1"></script>
 </body>
 </html>

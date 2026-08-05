@@ -463,7 +463,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     <thead>
                         <tr><th>App</th><th>Sheet</th><th>Chart type</th><th>Visual title</th><th>Dimensions</th><th>Measures</th></tr>
                     </thead>
-                    <tbody>${sheetRows || `<tr><td colspan="6">No sheet or chart inventory was returned for the queued app(s). See the gaps listed on the AssessmentAgent tab.</td></tr>`}</tbody>
+                    <tbody>${sheetRows || `<tr><td colspan="6">No sheet or chart inventory was returned for the queued app(s). See the gaps listed under <b>Agents &rarr; Assessment</b>.</td></tr>`}</tbody>
                 </table>
             </div>
             <div class="table-container">
@@ -495,7 +495,7 @@ document.addEventListener("DOMContentLoaded", () => {
         kpiHost.innerHTML =
             kpiBox("Expressions translated", `${queue.length}`, "Qlik → DAX measures") +
             kpiBox("Auto-approved", `${autoApproved}`, "Above the confidence bar", "success-text") +
-            kpiBox("Needs review", `${needsReview}`, needsReview ? "Open the Review queue" : "Nothing held back", needsReview ? "warning-text" : "success-text") +
+            kpiBox("Needs review", `${needsReview}`, needsReview ? "Below the confidence bar" : "Nothing held back", needsReview ? "warning-text" : "success-text") +
             kpiBox("Mean confidence", avgConf, "Across translated measures");
 
         const rows = queue.map(({ app, dq }) => `
@@ -510,7 +510,7 @@ document.addEventListener("DOMContentLoaded", () => {
         bodyHost.innerHTML = `
             <div class="table-container">
                 <h3>DAX translation queue</h3>
-                <p class="agent-section-note">Every Qlik expression this agent rewrote, with the confidence the translation carried. Edits are made on the <b>Review queue</b> tab.</p>
+                <p class="agent-section-note">Every Qlik expression this agent rewrote, with the confidence the translation carried. Anything below the bar is flagged <b>Needs Review</b> rather than dropped.</p>
                 <table class="custom-table">
                     <thead>
                         <tr><th>App</th><th>Qlik expression</th><th>Translated DAX</th><th>Confidence</th><th>Status</th></tr>
@@ -595,7 +595,7 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>`;
 
         const gotoBtn = document.getElementById("btn-agent-goto-artifacts");
-        if (gotoBtn) gotoBtn.addEventListener("click", () => switchSubTab("sub-downloads"));
+        if (gotoBtn) gotoBtn.addEventListener("click", () => switchTab("tab-artifacts"));
     }
 
     // The download cards describe files a run produced, so they stay hidden until
@@ -621,11 +621,15 @@ document.addEventListener("DOMContentLoaded", () => {
             detailBadge.textContent = label;
             detailBadge.className = `agent-badge-tag ${styleClass}`;
         }
-        const navPill = document.getElementById(`nav-state-${id}`);
-        if (navPill) {
-            navPill.textContent = styleClass === "completed" ? "done" : (styleClass === "running" ? "live" : "idle");
-            navPill.className = `nav-agent-state ${styleClass}`;
-        }
+        // The same short state reads in two places: the sidebar sub-item and the
+        // matching card on the agents overview.
+        const pillText = styleClass === "completed" ? "done" : (styleClass === "running" ? "live" : "idle");
+        [`nav-state-${id}`, `card-state-${id}`].forEach(pillId => {
+            const pill = document.getElementById(pillId);
+            if (!pill) return;
+            pill.textContent = pillText;
+            pill.className = `nav-agent-state ${styleClass}`;
+        });
     }
 
     function setAgentRunState(id, text) {
@@ -652,47 +656,124 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ----------------------------------------------------------------------
     // 2. SIDEBAR NAVIGATION
+    //
+    // Two levels: top-level tabs, and — under the Agents group — one sub-pane per
+    // AutoGen agent plus the overview that lists them. Every move through either
+    // level is pushed onto a history stack so the Back control in the header can
+    // retrace it, which is why all navigation goes through goTo() rather than
+    // touching classes directly.
     // ----------------------------------------------------------------------
     const navItems = document.querySelectorAll(".nav-menu .nav-item");
     const tabPanes = document.querySelectorAll(".main-content .tab-pane");
+    const navSubItems = document.querySelectorAll(".nav-submenu .nav-subitem");
+    const subPanes = document.querySelectorAll(".subtab-pane");
+    const agentsGroup = document.getElementById("nav-group-agents");
+    const agentsParent = agentsGroup ? agentsGroup.querySelector(".nav-item-parent") : null;
+
+    // The pane each tab opens on. Only the Agents tab has an inner level.
+    const DEFAULT_SUBPANE = { "tab-agents": "sub-agents-overview" };
+
+    // Which tab owns a given sub-pane, so a deep link like "sub-agent-map" can
+    // raise its parent tab too.
+    function tabOwning(paneId) {
+        const pane = document.getElementById(paneId);
+        const section = pane ? pane.closest(".tab-pane") : null;
+        return section ? section.id : null;
+    }
+
+    let currentView = { tab: "tab-run", sub: null };
+    const viewHistory = [];
+
+    function setAgentsGroupOpen(open) {
+        if (!agentsGroup) return;
+        agentsGroup.classList.toggle("open", open);
+        if (agentsParent) agentsParent.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    // Paints the chrome for a view without recording it — goTo() owns the history.
+    function applyView(view) {
+        navItems.forEach(i => i.classList.toggle("active", i.getAttribute("data-tab") === view.tab));
+        tabPanes.forEach(p => p.classList.toggle("active", p.id === view.tab));
+
+        const sub = view.sub || DEFAULT_SUBPANE[view.tab] || null;
+        subPanes.forEach(p => p.classList.toggle("active", p.id === sub));
+        navSubItems.forEach(a => {
+            const on = a.getAttribute("data-subtab") === sub;
+            a.classList.toggle("active", on);
+            a.setAttribute("aria-selected", on ? "true" : "false");
+        });
+
+        // The group stays open while the user is inside it, so the four agents
+        // remain one click apart.
+        setAgentsGroupOpen(view.tab === "tab-agents");
+
+        currentView = { tab: view.tab, sub: sub };
+        updateBackControl();
+    }
+
+    function sameView(a, b) {
+        return a && b && a.tab === b.tab && (a.sub || null) === (b.sub || null);
+    }
+
+    function goTo(tabId, subId) {
+        const target = { tab: tabId, sub: subId || DEFAULT_SUBPANE[tabId] || null };
+        if (!document.getElementById(target.tab)) return;
+        if (sameView(target, currentView)) return;
+
+        viewHistory.push({ ...currentView });
+        applyView(target);
+    }
 
     function switchTab(tabId) {
-        navItems.forEach(i => i.classList.remove("active"));
-        tabPanes.forEach(p => p.classList.remove("active"));
-
-        const targetNav = document.querySelector(`.nav-item[data-tab="${tabId}"]`);
-        const targetPane = document.getElementById(tabId);
-
-        if (targetNav && targetPane) {
-            targetNav.classList.add("active");
-            targetPane.classList.add("active");
-        }
+        goTo(tabId, null);
     }
+
+    // Opens a pane inside a tab; the owning tab is raised with it, so callers do
+    // not have to know which tab a pane lives in.
+    function switchSubTab(paneId) {
+        const owner = tabOwning(paneId);
+        if (!owner) return;
+        goTo(owner, paneId);
+    }
+
+    function goBack() {
+        const previous = viewHistory.pop();
+        if (previous) applyView(previous);
+    }
+
+    const backBtn = document.getElementById("btn-global-back");
+
+    function updateBackControl() {
+        if (!backBtn) return;
+        backBtn.hidden = viewHistory.length === 0;
+    }
+
+    if (backBtn) backBtn.addEventListener("click", goBack);
 
     navItems.forEach(item => {
         item.addEventListener("click", (e) => {
             e.preventDefault();
             const tabId = item.getAttribute("data-tab");
+            // Re-clicking the open Agents group collapses it rather than being a
+            // no-op, so the sub-items can be tucked away again.
+            if (tabId === "tab-agents" && currentView.tab === "tab-agents" && agentsGroup) {
+                setAgentsGroupOpen(!agentsGroup.classList.contains("open"));
+                return;
+            }
             switchTab(tabId);
         });
     });
 
-    // Horizontal sub-tabs inside Artifacts: downloads plus one pane per agent.
-    const subTabs = document.querySelectorAll(".subtab-bar .subtab");
-    const subPanes = document.querySelectorAll(".subtab-pane");
-
-    function switchSubTab(paneId) {
-        subTabs.forEach(t => {
-            const on = t.getAttribute("data-subtab") === paneId;
-            t.classList.toggle("active", on);
-            t.setAttribute("aria-selected", on ? "true" : "false");
+    // Sidebar agent sub-items, the overview cards, and the "All agents" back links
+    // inside each detail pane all address a pane by id.
+    document.querySelectorAll("[data-subtab]").forEach(el => {
+        el.addEventListener("click", (e) => {
+            e.preventDefault();
+            switchSubTab(el.getAttribute("data-subtab"));
         });
-        subPanes.forEach(p => p.classList.toggle("active", p.id === paneId));
-    }
-
-    subTabs.forEach(tab => {
-        tab.addEventListener("click", () => switchSubTab(tab.getAttribute("data-subtab")));
     });
+
+    applyView(currentView);
 
     // ----------------------------------------------------------------------
     // 2b. SOURCE CHOOSER
@@ -1782,7 +1863,7 @@ ${(appData.gaps && appData.gaps.length)
             b2.classList.remove("running-btn", "success-btn");
             b2.style.background = "";
             b2.style.color = "";
-            b2.innerHTML = "Migrate Selected App";
+            b2.innerHTML = "Migrate Selected Apps";
             // Stays hidden until Test Connection has actually listed the tenant's apps.
             b2.style.display = qlikConnection ? "block" : "none";
         }
@@ -1805,77 +1886,11 @@ ${(appData.gaps && appData.gaps.length)
             if (dzSize) dzSize.textContent = appData.size;
         }
 
-        // B. Assessment Tab Titles & KPIs
-        const assessName = document.getElementById("assess-target-name");
-        if (assessName) assessName.textContent = appData.filename;
-
-        const kpiAppName = document.getElementById("kpi-app-name");
-        if (kpiAppName) kpiAppName.textContent = appData.name;
-
-        const kpiFields = document.getElementById("kpi-fields-cnt");
-        if (kpiFields) kpiFields.textContent = appData.fieldsCnt;
-
-        const kpiVisuals = document.getElementById("kpi-visuals-cnt");
-        if (kpiVisuals) kpiVisuals.textContent = appData.visualsCnt;
-
-        const kpiVisualsSub = document.getElementById("kpi-visuals-sub");
-        if (kpiVisualsSub) {
-            kpiVisualsSub.textContent = appData.source === "qlik-cloud"
-                ? "App objects need a QIX engine session"
-                : "Parsed from Load Script";
-        }
-
-        // PII is reported from the same column-name scan the AssessmentAgent tab
-        // uses, so the two screens can never disagree.
-        const activePii = scanPiiColumns(appData);
-        const kpiPiiValue = document.getElementById("kpi-pii-value");
-        const kpiPiiSub = document.getElementById("kpi-pii-sub");
-        if (kpiPiiValue) {
-            kpiPiiValue.textContent = activePii.length ? `${activePii.length} column(s) flagged` : "None flagged";
-            kpiPiiValue.className = `kpi-value ${activePii.length ? "warning-text" : "success-text"}`;
-        }
-        if (kpiPiiSub) {
-            kpiPiiSub.textContent = activePii.length
-                ? `Name-pattern match: ${activePii.map(h => h.column).join(", ")}`
-                : "Column-name scan found no match";
-        }
-
+        // B. Agent panes — volumetrics, PII findings and the DAX queue all render
+        // from the same registry, so there is no separate scorecard to keep in step.
         renderAgentDetailTabs();
 
-        // Table body
-        const assessTbody = document.getElementById("assessment-tbody");
-        if (assessTbody) {
-            assessTbody.innerHTML = appData.sheets.map(sh => `
-                <tr>
-                    <td><b>${sh.name}</b></td>
-                    <td>${sh.chartType}</td>
-                    <td>${sh.title}</td>
-                    <td><code>${sh.dims}</code></td>
-                    <td><code>${sh.meas}</code></td>
-                    <td><span class="status-badge success">${sh.status}</span></td>
-                </tr>
-            `).join("") || `<tr><td colspan="6">No sheet inventory was returned for this app. See the gaps listed on the AssessmentAgent tab in Artifacts.</td></tr>`;
-        }
-
-        // C. Review Queue Tab Titles & Table
-        const reviewName = document.getElementById("review-target-name");
-        if (reviewName) reviewName.textContent = appData.name;
-
-        const reviewTbody = document.getElementById("review-tbody");
-        if (reviewTbody) {
-            reviewTbody.innerHTML = appData.daxQueue.map(dq => `
-                <tr>
-                    <td><input type="checkbox" checked></td>
-                    <td><code>${dq.expr}</code></td>
-                    <td><code class="dax-code">${dq.dax}</code></td>
-                    <td><span class="conf-pill">${dq.conf}</span></td>
-                    <td><span class="status-badge ${dq.status === 'Auto-Approved' ? 'success' : 'pending'}">${dq.status}</span></td>
-                    <td><button class="btn-icon" title="Edit DAX"><i class="fa-solid fa-pen-to-square"></i></button></td>
-                </tr>
-            `).join("");
-        }
-
-        // D. Artifacts Tab Titles & LIVE DOWNLOAD BUTTONS
+        // C. Artifacts Tab Titles & LIVE DOWNLOAD BUTTONS
         // Every uploaded .qvf produces its own project, so the artifact cards describe
         // (and download) the whole batch rather than only the active file.
         const batchApps = getBatchApps();
@@ -1957,7 +1972,7 @@ ${(appData.gaps && appData.gaps.length)
             };
         }
 
-        // E. Update Job History Tab dynamically
+        // D. Update Job History Tab dynamically
         renderJobHistory();
     }
 
@@ -2210,7 +2225,6 @@ ${(appData.gaps && appData.gaps.length)
                 sheets: "3 Pages",
                 visuals: "25 Visuals",
                 time: "8.61s",
-                audit: "PASSED (< 5%)",
                 date: "2026-07-29 16:51"
             },
             {
@@ -2219,7 +2233,6 @@ ${(appData.gaps && appData.gaps.length)
                 sheets: "2 Pages",
                 visuals: "10 Visuals",
                 time: "7.82s",
-                audit: "PASSED (< 5%)",
                 date: "2026-07-29 15:40"
             },
             {
@@ -2228,7 +2241,6 @@ ${(appData.gaps && appData.gaps.length)
                 sheets: "2 Pages",
                 visuals: "9 Visuals",
                 time: "6.14s",
-                audit: "PASSED (< 5%)",
                 date: "2026-07-28 11:20"
             }
         ];
@@ -2246,7 +2258,6 @@ ${(appData.gaps && appData.gaps.length)
                 <td>${h.sheets}</td>
                 <td>${h.visuals}</td>
                 <td><code>${h.time}</code></td>
-                <td><span class="status-badge success">${h.audit}</span></td>
                 <td>${h.date}</td>
             </tr>
         `).join("");
@@ -2267,7 +2278,6 @@ ${(appData.gaps && appData.gaps.length)
             sheets: appData.unknownVisuals ? "Not reported" : parts[0].trim(),
             visuals: appData.unknownVisuals || !parts[1] ? "Not reported" : parts[1].trim(),
             time: typeof elapsedSeconds === "number" ? elapsedSeconds.toFixed(2) + "s" : "—",
-            audit: "Not computed",
             date: dateStr
         });
 
@@ -2310,13 +2320,13 @@ ${(appData.gaps && appData.gaps.length)
         // the whole migration over again.
         if (btnElem.classList.contains("success-btn")) {
             switchTab("tab-artifacts");
-            switchSubTab("sub-downloads");
             return;
         }
         if (btnElem.id === "btn-migrate-qlik") {
             const selectElem = document.getElementById("qlik-app-select");
-            if (!selectElem || !selectElem.value) {
-                alert("Please select an app to migrate!");
+            const chosenApps = selectedQlikApps();
+            if (!chosenApps.length) {
+                alert("Please select at least one app to migrate.");
                 if (selectElem) selectElem.focus();
                 return;
             }
@@ -2340,28 +2350,63 @@ ${(appData.gaps && appData.gaps.length)
                 prefix: destination.prefix
             };
 
-            // Read the app's real data model before anything is shown as migrated.
-            // If the tenant will not hand it over, the run does not start.
-            const appName = selectElem.options[selectElem.selectedIndex].text;
+            // Read every selected app's real data model before anything is shown as
+            // migrated. Each is read on its own, so one app the tenant will not hand
+            // over is reported and skipped rather than sinking the whole run.
             const originalLabel = btnElem.innerHTML;
             btnElem.disabled = true;
-            btnElem.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Reading app metadata...`;
+            const loadedKeys = [];
+            const failures = [];
             try {
-                const key = await loadQlikCloudApp(selectElem.value, appName);
-                APP_REGISTRY[key].fabricTarget = fabricTarget;
-                if (fabricTarget.prefix) {
-                    APP_REGISTRY[key].pbitName = `${fabricTarget.prefix}.pbit`;
-                    APP_REGISTRY[key].pbipName = `${fabricTarget.prefix}.pbip`;
+                for (let i = 0; i < chosenApps.length; i++) {
+                    const app = chosenApps[i];
+                    btnElem.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Reading metadata ${i + 1} of ${chosenApps.length}...`;
+                    try {
+                        const key = await loadQlikCloudApp(app.id, app.name);
+                        APP_REGISTRY[key].fabricTarget = fabricTarget;
+                        if (fabricTarget.prefix) {
+                            // One prefix across several apps would name every project
+                            // the same file, so with a batch it is used as an actual
+                            // prefix. A single app keeps the existing naming.
+                            const base = chosenApps.length > 1
+                                ? `${fabricTarget.prefix}_${APP_REGISTRY[key].safeName}`
+                                : fabricTarget.prefix;
+                            APP_REGISTRY[key].pbitName = `${base}.pbit`;
+                            APP_REGISTRY[key].pbipName = `${base}.pbip`;
+                        }
+                        loadedKeys.push(key);
+                    } catch (err) {
+                        console.error(err);
+                        failures.push({ name: app.name, message: err.message });
+                    }
                 }
-                refreshAllTabsForActiveQvf(APP_REGISTRY[key], [key]);
-            } catch (err) {
-                console.error(err);
-                alert(`Could not read "${appName}" from Qlik Cloud, so nothing was migrated.\n\n${err.message}`);
-                return;
             } finally {
                 btnElem.disabled = false;
                 btnElem.innerHTML = originalLabel;
             }
+
+            if (!loadedKeys.length) {
+                alert([
+                    `None of the ${chosenApps.length} selected app(s) could be read from Qlik Cloud, so nothing was migrated.`,
+                    "",
+                    failures.map(f => `• ${f.name}\n  ${f.message}`).join("\n\n")
+                ].join("\n"));
+                return;
+            }
+
+            // A partial batch still runs, but the user is told exactly what is not in
+            // it — the run must never quietly stand in for apps it never read.
+            if (failures.length) {
+                alert([
+                    `${failures.length} of ${chosenApps.length} selected app(s) could not be read and are NOT part of this run:`,
+                    "",
+                    failures.map(f => `• ${f.name}\n  ${f.message}`).join("\n\n"),
+                    "",
+                    `Continuing with the ${loadedKeys.length} app(s) that were read.`
+                ].join("\n"));
+            }
+
+            refreshAllTabsForActiveQvf(APP_REGISTRY[loadedKeys[0]], loadedKeys);
         } else if (!currentActiveQvf) {
             alert("Please browse and upload a .QVF file first to start migration!");
             const fileInput = document.getElementById("qvf-file-input");
@@ -2545,7 +2590,99 @@ ${(appData.gaps && appData.gaps.length)
     // Pasting from the Qlik console often brings the scheme along ("Bearer eyJ…"),
     // which would go out as "Bearer Bearer eyJ…" and answer 401.
     function normaliseApiKey(raw) {
-        return String(raw || "").trim().replace(/^Bearer\s+/i, "").trim();
+        return String(raw || "")
+            .trim()
+            .replace(/^Bearer\s+/i, "")
+            // A key copied out of an email, chat or PDF arrives wrapped across
+            // lines, or carrying zero-width characters and smart punctuation.
+            // A JWT is base64url — only these characters are legal in one — so
+            // dropping everything else can repair a damaged paste but can never
+            // corrupt a good key.
+            .replace(/[^A-Za-z0-9._-]/g, "");
+    }
+
+    // A Qlik API key is a JWT: three base64url segments whose middle segment is a
+    // readable JSON payload. Decoding it locally turns the mistakes that all look
+    // identical from the outside — a truncated paste, an expired key, a key minted
+    // in another tenant — into a message that names the actual problem, before a
+    // request is spent finding out.
+    //
+    // This is a sanity check, NOT verification. The signature is never checked;
+    // only the tenant can do that. So anything unreadable or shaped unexpectedly
+    // falls through silently rather than blocking a key that may well be fine.
+    function decodeJwtPayload(token) {
+        const parts = String(token).split(".");
+        if (parts.length !== 3) return null;
+        try {
+            let b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+            while (b64.length % 4) b64 += "=";
+            // atob yields Latin-1 bytes; the percent-encoding round trip restores
+            // any non-ASCII inside claims such as the owning user's name.
+            const json = decodeURIComponent(
+                Array.from(atob(b64), c => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join("")
+            );
+            const claims = JSON.parse(json);
+            return claims && typeof claims === "object" ? claims : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function hostOf(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+        try {
+            return new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw).hostname.toLowerCase();
+        } catch (e) {
+            return "";
+        }
+    }
+
+    // Returns a message describing a provable problem, or null when nothing is
+    // demonstrably wrong — which includes every case the token does not let us
+    // check. The tenant stays the authority on whether a key actually works.
+    function inspectApiKey(key, tenantUrl) {
+        const segments = String(key).split(".");
+        if (segments.length !== 3 || segments.some(s => !s)) {
+            return [
+                "That does not look like a complete Qlik API key.",
+                "",
+                `A key is three dot-separated segments; this one has ${segments.length}.`,
+                "The usual cause is a paste that dropped characters. Copy it again from",
+                "Management Console → API keys, straight into the field."
+            ].join("\n");
+        }
+
+        const claims = decodeJwtPayload(key);
+        if (!claims) return null;
+
+        if (typeof claims.exp === "number" && claims.exp * 1000 < Date.now()) {
+            return [
+                `This key expired on ${new Date(claims.exp * 1000).toLocaleString()}.`,
+                "",
+                "Qlik rejects an expired key with a 401 whatever the tenant or permissions,",
+                "so this cannot succeed. Issue a new one under Management Console → API keys."
+            ].join("\n");
+        }
+
+        // `iss` on a Qlik key is the tenant that minted it. Compared only when it
+        // actually reads as a Qlik tenant hostname, so a claim shaped differently
+        // than expected never blocks a request.
+        const keyHost = hostOf(claims.iss);
+        const formHost = hostOf(tenantUrl);
+        if (keyHost && formHost && /qlikcloud\.com$/i.test(keyHost) && keyHost !== formHost) {
+            return [
+                "This key was issued by a different tenant.",
+                "",
+                `  Key belongs to : ${keyHost}`,
+                `  Tenant URL     : ${formHost}`,
+                "",
+                "Qlik keys are tenant-scoped, so this pairing can only ever answer 401.",
+                "Use the tenant the key belongs to, or a key minted in the one you entered."
+            ].join("\n");
+        }
+
+        return null;
     }
 
     // A Qlik tenant only answers cross-origin browser calls from origins it has
@@ -2667,6 +2804,8 @@ ${(appData.gaps && appData.gaps.length)
             filename: key,
             source: "qlik-cloud",
             appId: appId,
+            // Kept so a batch can build collision-free file names from it.
+            safeName: safeName,
             size: size || "Size not reported",
             sizeBytes: typeof meta.static_byte_size === "number" ? meta.static_byte_size : 0,
             fieldsCnt: `${columns.length} Columns`,
@@ -2692,6 +2831,51 @@ ${(appData.gaps && appData.gaps.length)
         return key;
     }
 
+    // Every option the user has actually highlighted, in list order. Options with
+    // no value are ignored so a stray placeholder could never enter a run.
+    function selectedQlikApps() {
+        const select = document.getElementById("qlik-app-select");
+        if (!select) return [];
+        return Array.from(select.selectedOptions)
+            .filter(o => o.value)
+            .map(o => ({ id: o.value, name: o.textContent }));
+    }
+
+    function updateAppSelectionCount() {
+        const label = document.getElementById("qlik-app-count");
+        if (!label) return;
+        const select = document.getElementById("qlik-app-select");
+        const total = select ? select.options.length : 0;
+        const chosen = selectedQlikApps().length;
+        label.textContent = chosen
+            ? `${chosen} of ${total} app${total === 1 ? "" : "s"} selected`
+            : `No apps selected — ${total} available`;
+        label.classList.toggle("has-selection", chosen > 0);
+    }
+
+    const appSelect = document.getElementById("qlik-app-select");
+    if (appSelect) appSelect.addEventListener("change", updateAppSelectionCount);
+
+    const btnSelectAllApps = document.getElementById("btn-select-all-apps");
+    if (btnSelectAllApps) {
+        btnSelectAllApps.addEventListener("click", () => {
+            const select = document.getElementById("qlik-app-select");
+            if (!select) return;
+            Array.from(select.options).forEach(o => { o.selected = !!o.value; });
+            updateAppSelectionCount();
+        });
+    }
+
+    const btnClearApps = document.getElementById("btn-clear-apps");
+    if (btnClearApps) {
+        btnClearApps.addEventListener("click", () => {
+            const select = document.getElementById("qlik-app-select");
+            if (!select) return;
+            select.selectedIndex = -1;
+            updateAppSelectionCount();
+        });
+    }
+
     const btnTestConnection = document.getElementById("btn-test-connection");
     if (btnTestConnection) {
         btnTestConnection.addEventListener("click", async () => {
@@ -2706,6 +2890,15 @@ ${(appData.gaps && appData.gaps.length)
 
             const cleanUrl = normaliseTenantUrl(tenantUrl);
             const endpoint = `${cleanUrl}/api/v1/items?resourceType=app`;
+
+            // Anything the key itself proves wrong is reported here, where it can be
+            // named exactly, rather than coming back as an indistinguishable 401.
+            const keyProblem = inspectApiKey(apiKey, cleanUrl);
+            if (keyProblem) {
+                alert(keyProblem);
+                if (apiKeyInput) apiKeyInput.focus();
+                return;
+            }
 
             btnTestConnection.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Connecting...';
             btnTestConnection.disabled = true;
@@ -2732,13 +2925,14 @@ ${(appData.gaps && appData.gaps.length)
                     alert("Connected successfully, but no apps were found.");
                 } else {
                     const select = document.getElementById("qlik-app-select");
-                    select.innerHTML = '<option value="">Select an app...</option>';
+                    select.innerHTML = "";
                     apps.forEach(app => {
                         const option = document.createElement("option");
                         option.value = app.id || app.resourceId;
                         option.textContent = app.name || "Unnamed App";
                         select.appendChild(option);
                     });
+                    updateAppSelectionCount();
 
                     qlikConnection = { baseUrl: cleanUrl, apiKey: apiKey };
 

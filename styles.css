@@ -305,6 +305,94 @@ h1, h2, h3, h4 {
     border-left-color: var(--accent);
 }
 
+/* ---------- Expandable nav group (Agents) ---------- */
+
+.nav-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.nav-item-parent {
+    cursor: pointer;
+}
+
+.nav-item-label {
+    flex-grow: 1;
+}
+
+.nav-caret {
+    font-size: 10px !important;
+    width: auto !important;
+    color: var(--text-muted);
+    transition: transform var(--transition-base), color var(--transition-fast);
+}
+
+.nav-group.open .nav-caret {
+    transform: rotate(180deg);
+    color: var(--accent);
+}
+
+/* Collapsed by default. The reveal is a keyframe on the opened state rather than
+   a height transition, so the submenu is never left mid-collapse if the
+   animation is interrupted — and it needs no hard-coded height cap. */
+.nav-submenu {
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    margin-left: 22px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
+}
+
+.nav-group.open .nav-submenu {
+    display: flex;
+    margin-top: 4px;
+    animation: navSubmenuIn var(--transition-base);
+}
+
+@keyframes navSubmenuIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: none; }
+}
+
+.nav-subitem {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    color: var(--text-sub);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.nav-subitem:hover {
+    background-color: var(--bg-overlay);
+    color: var(--text-strong);
+}
+
+.nav-subitem.active {
+    background-color: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.nav-subitem-label {
+    flex-grow: 1;
+}
+
+/* Carries each agent's signature colour so the sub-item is recognisable at a
+   glance without repeating the full agent icon. */
+.nav-subdot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px var(--bg-overlay);
+}
+
 .sidebar-footer {
     border-top: 1px solid var(--border);
     padding-top: 16px;
@@ -353,6 +441,77 @@ h1, h2, h3, h4 {
     align-items: flex-start;
     margin-bottom: 24px;
     gap: 20px;
+}
+
+.header-lead {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    min-width: 0;
+}
+
+/* Header Back control. Sits level with the title block rather than above it,
+   so the header keeps a single baseline whether or not it is showing. */
+.btn-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 9px 16px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-pill);
+    background: var(--bg-card);
+    color: var(--text-sub);
+    font-family: var(--font-main);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    box-shadow: var(--shadow-sm);
+    transition: background-color var(--transition-fast),
+                color var(--transition-fast),
+                border-color var(--transition-fast),
+                box-shadow var(--transition-fast),
+                transform var(--transition-fast);
+}
+
+.btn-back:hover {
+    background: var(--bg-card-hover);
+    color: var(--accent);
+    border-color: var(--accent-ring);
+    box-shadow: var(--shadow-md);
+    transform: translateX(-2px);
+}
+
+.btn-back[hidden] {
+    display: none;
+}
+
+/* In-pane back link — quieter than the header control, since it retreats one
+   known level rather than through history. */
+.btn-back-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 6px 12px 6px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    background: var(--bg-overlay);
+    color: var(--text-sub);
+    font-family: var(--font-main);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color var(--transition-fast),
+                color var(--transition-fast),
+                border-color var(--transition-fast);
+}
+
+.btn-back-inline:hover {
+    background: var(--accent-soft);
+    border-color: var(--accent-ring);
+    color: var(--accent);
 }
 
 .header-titles h1 {
@@ -654,6 +813,68 @@ html[data-theme="dark"] .theme-toggle__thumb {
 
 .custom-input::placeholder {
     color: var(--text-muted);
+}
+
+/* ---------- Multi-select app picker ---------- */
+
+/* A list, not a collapsed control: the padding that suits a single-line input
+   would sit around the whole box rather than each row, so it is moved onto the
+   options themselves. */
+.custom-multiselect {
+    padding: 6px;
+    height: auto;
+    overflow-y: auto;
+}
+
+.custom-multiselect option {
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    color: var(--text-body);
+    font-size: 14px;
+}
+
+/* Chrome and Firefox both need the background forced with the colour repeated,
+   or a selected row keeps the UA's own blue when the list loses focus. */
+.custom-multiselect option:checked {
+    background: var(--accent) linear-gradient(0deg, var(--accent) 0%, var(--accent) 100%);
+    color: var(--text-on-accent);
+    font-weight: 600;
+}
+
+.select-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: -2px;
+}
+
+.select-count {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.select-count.has-selection {
+    color: var(--accent);
+}
+
+.select-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Separates the two actions without an element to carry a border. */
+.select-actions .btn-link + .btn-link::before {
+    content: "";
+    display: inline-block;
+    width: 1px;
+    height: 11px;
+    margin-right: 8px;
+    vertical-align: -1px;
+    background: var(--border-strong);
 }
 
 /* --------------------------------------------------------------------------
@@ -1348,6 +1569,12 @@ html[data-theme="dark"] .theme-toggle__thumb {
     .main-content { margin-left: 76px; padding: 24px; }
     .migration-grid,
     .settings-grid { grid-template-columns: 1fr; }
+
+    /* The rail has no room for labelled sub-items, so the group collapses to its
+       icon and the agents are picked from the overview cards instead. The caret
+       needs the extra specificity to beat Font Awesome's own display rule. */
+    .sidebar .nav-caret { display: none; }
+    .nav-group.open .nav-submenu { display: none; }
 }
 
 @media (max-width: 720px) {
@@ -1374,51 +1601,8 @@ html[data-theme="dark"] .theme-toggle__thumb {
    AGENT DETAIL TABS (one navigation entry per AutoGen agent)
    ====================================================================== */
 
-/* Horizontal sub-tab strip inside the Artifacts pane. */
-/* Five long agent names do not fit on one row at every width, so the strip
-   stays a single row and scrolls sideways rather than wrapping into a block. */
-.subtab-bar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    margin-bottom: 24px;
-    border-bottom: 1px solid var(--border);
-    scrollbar-width: thin;
-}
-
-.subtab {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 16px;
-    border: none;
-    border-bottom: 2px solid transparent;
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-    background: transparent;
-    color: var(--text-sub);
-    font-family: var(--font-main);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background-color var(--transition-fast),
-                color var(--transition-fast),
-                border-color var(--transition-fast);
-}
-
-.subtab:hover {
-    background-color: var(--bg-overlay);
-    color: var(--text-strong);
-}
-
-.subtab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-    background-color: var(--accent-soft);
-}
-
+/* Panes inside the Agents tab: the overview plus one per agent. Which one is
+   raised is driven by the sidebar sub-items, not by an in-page strip. */
 .subtab-pane {
     display: none;
     animation: fadeIn 0.3s ease;
@@ -1447,6 +1631,111 @@ html[data-theme="dark"] .theme-toggle__thumb {
 .nav-agent-state.completed {
     background: var(--success-soft);
     color: var(--success);
+}
+
+/* ---------- Agents overview: one card per agent ---------- */
+
+/* Always exactly four agents, so the column counts are fixed rather than
+   auto-fit — auto-fit strands the fourth card on a row of its own at common
+   desktop widths. The breakpoints match .kpi-row / .artifacts-grid. */
+.agent-card-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+    margin-top: 24px;
+}
+
+@media (max-width: 1200px) {
+    .agent-card-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.agent-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 22px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
+    box-shadow: var(--shadow-sm);
+    font-family: var(--font-main);
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--transition-fast),
+                border-color var(--transition-fast),
+                box-shadow var(--transition-base),
+                transform var(--transition-base);
+}
+
+.agent-card:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--accent-ring);
+    box-shadow: var(--shadow-lg), var(--glow-accent);
+    transform: translateY(-3px);
+}
+
+.agent-card-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    font-size: 19px;
+    flex-shrink: 0;
+}
+
+.agent-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex-grow: 1;
+}
+
+.agent-card-phase {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.agent-card-title {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    color: var(--text-strong);
+}
+
+.agent-card-desc {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-sub);
+}
+
+.agent-card-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+
+.agent-card-go {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.agent-card-go i {
+    transition: transform var(--transition-fast);
+}
+
+.agent-card:hover .agent-card-go i {
+    transform: translateX(4px);
 }
 
 .agent-detail-head {
@@ -1614,7 +1903,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
 }
 
 @media (max-width: 760px) {
-    .subtab { padding: 10px 12px; }
+    .agent-card-grid { grid-template-columns: 1fr; }
 }
 
 /* ======================================================================
