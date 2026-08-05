@@ -218,7 +218,7 @@ class ReusableServer(socketserver.ThreadingTCPServer):
 
 
 if __name__ == "__main__":
-    with ReusableServer(("", PORT), MigrationUIHandler) as httpd:
+    with ReusableServer(("localhost", PORT), MigrationUIHandler) as httpd:
         print("Migration UI on  http://localhost:%d" % PORT)
         print("Qlik proxy at    http://localhost:%d%s?target=<tenant url>" % (PORT, PROXY_PATH))
         print("Fabric proxy at  http://localhost:%d%s?target=<fabric url>" % (PORT, FABRIC_PROXY_PATH))

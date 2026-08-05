@@ -1975,31 +1975,31 @@ html[data-theme="dark"] .theme-toggle__thumb {
 }
 
 .agent-detail-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 360px;
-    gap: 20px;
-    align-items: start;
+    display: block;
+    width: 100%;
 }
 
 .agent-detail-main {
+    width: 100%;
     min-width: 0;
 }
 
-/* Long DAX / dimension lists must scroll inside the card, never widen the page. */
+/* Tables inside agent detail main expand cleanly to fill full width */
 .agent-detail-main .table-container {
+    width: 100%;
+    max-width: 100%;
     overflow-x: auto;
+    margin-bottom: 24px;
 }
 
-/* Terminal panel keeps the dark treatment of the live streaming deck in both
-   themes, so a log line looks the same wherever it is read. */
+.agent-detail-main table.custom-table {
+    width: 100%;
+    table-layout: auto;
+}
+
+/* Terminal panel hidden as requested */
 .agent-log-panel {
-    background: #0b0f19;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: var(--radius-lg);
-    padding: 16px;
-    position: sticky;
-    top: 24px;
-    box-shadow: var(--shadow-md);
+    display: none !important;
 }
 
 .agent-log-head {
