@@ -25,7 +25,7 @@
         })();
     </script>
 
-    <link rel="stylesheet" href="styles.css?v=20260805_resourceid_v1">
+    <link rel="stylesheet" href="styles.css?v=20260805_server_export_v1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -47,7 +47,7 @@
 
                 <!--
                   Agents is a group, not a leaf: opening it reveals one sub-item per
-                  AutoGen agent. The sub-items drive the panes inside #tab-agents.
+                  engine phase. The sub-items drive the panes inside #tab-agents.
                 -->
                 <div class="nav-group" id="nav-group-agents">
                     <a href="#agents" class="nav-item nav-item-parent" data-tab="tab-agents"
@@ -74,7 +74,7 @@
                         </a>
                         <a href="#agent-report-generation" class="nav-subitem" data-subtab="sub-agent-gen" role="tab" aria-selected="false">
                             <span class="nav-subdot" style="background: #10b981;"></span>
-                            <span class="nav-subitem-label">Report generation</span>
+                            <span class="nav-subitem-label">Report Generation</span>
                             <span class="nav-agent-state" id="nav-state-gen">idle</span>
                         </a>
                     </div>
@@ -83,6 +83,15 @@
                 <a href="#artifacts" class="nav-item" data-tab="tab-artifacts"><i class="fa-solid fa-box-open"></i> Artifacts</a>
                 <a href="#job-history" class="nav-item" data-tab="tab-history"><i class="fa-solid fa-clock-rotate-left"></i> Migration history</a>
             </nav>
+            <div class="sidebar-footer">
+                <div class="autogen-badge">
+                    <div class="badge-icon"><i class="fa-solid fa-robot"></i></div>
+                    <div class="badge-content">
+                        <div class="badge-title">Migration engine</div>
+                        <div class="badge-desc">cli/ai_qvf_to_powerbi.py</div>
+                    </div>
+                </div>
+            </div>
         </aside>
 
         <!-- MAIN CONTENT AREA -->
@@ -322,19 +331,19 @@
                 <!-- AUTOGEN LIVE CONSOLE MODAL / PANEL -->
                 <div id="autogen-console" class="autogen-console-card hidden">
                     <div class="console-header">
-                        <div class="console-title"><i class="fa-solid fa-robot"></i> AI Agents 4-Phase Multi-Agent Execution</div>
+                        <div class="console-title"><i class="fa-solid fa-terminal"></i> Migration engine — live output</div>
                         <div class="console-status" id="console-status-badge"><span class="pulse-dot"></span> RUNNING</div>
                     </div>
                     <!-- 4 AUTONOMOUS AGENTS LIVE STREAMING DECK -->
                     <div class="autogen-4agents-grid" id="autogen-4agents-grid">
-                        <!-- Agent 1: AssessmentAgent -->
+                        <!-- Phase 1: Assessment -->
                         <div class="agent-live-box">
                             <div class="agent-live-header">
                                 <div class="agent-live-identity">
                                     <div class="agent-live-avatar" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fa-solid fa-user-shield"></i></div>
                                     <div class="agent-live-names">
-                                        <h4>AssessmentAgent</h4>
-                                        <span>Phase 1: Pre-Migration & PII Audit</span>
+                                        <h4>Assessment</h4>
+                                        <span>Phase 1: .qvf binary, load script &amp; schema</span>
                                     </div>
                                 </div>
                                 <span class="agent-badge-tag" id="badge-agent-assess">IDLE</span>
@@ -342,14 +351,14 @@
                             <div class="agent-live-logs" id="logs-agent-assess"></div>
                         </div>
 
-                        <!-- Agent 2: ReportParsingAgent -->
+                        <!-- Phase 2: Parsing -->
                         <div class="agent-live-box">
                             <div class="agent-live-header">
                                 <div class="agent-live-identity">
                                     <div class="agent-live-avatar" style="background: linear-gradient(135deg, #06b6d4, #0891b2);"><i class="fa-solid fa-diagram-project"></i></div>
                                     <div class="agent-live-names">
-                                        <h4>ReportParsingAgent</h4>
-                                        <span>Phase 2: QVF Volumetrics Parser</span>
+                                        <h4>Parsing</h4>
+                                        <span>Phase 2: model.bim — tables, columns, DAX</span>
                                     </div>
                                 </div>
                                 <span class="agent-badge-tag" id="badge-agent-parse">IDLE</span>
@@ -357,14 +366,14 @@
                             <div class="agent-live-logs" id="logs-agent-parse"></div>
                         </div>
 
-                        <!-- Agent 3: MappingAgent -->
+                        <!-- Phase 3: Mapping -->
                         <div class="agent-live-box">
                             <div class="agent-live-header">
                                 <div class="agent-live-identity">
                                     <div class="agent-live-avatar" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);"><i class="fa-solid fa-brain"></i></div>
                                     <div class="agent-live-names">
-                                        <h4>MappingAgent</h4>
-                                        <span>Phase 3: DAX & Visual Translator</span>
+                                        <h4>Mapping</h4>
+                                        <span>Phase 3: report pages &amp; visuals</span>
                                     </div>
                                 </div>
                                 <span class="agent-badge-tag" id="badge-agent-map">IDLE</span>
@@ -372,14 +381,14 @@
                             <div class="agent-live-logs" id="logs-agent-map"></div>
                         </div>
 
-                        <!-- Agent 4: ReportGenerationAgent -->
+                        <!-- Phase 4: Report Generation -->
                         <div class="agent-live-box">
                             <div class="agent-live-header">
                                 <div class="agent-live-identity">
                                     <div class="agent-live-avatar" style="background: linear-gradient(135deg, #10b981, #047857);"><i class="fa-solid fa-boxes-packing"></i></div>
                                     <div class="agent-live-names">
-                                        <h4>ReportGenerationAgent</h4>
-                                        <span>Phase 4: Fabric PBIP Architect</span>
+                                        <h4>Report Generation</h4>
+                                        <span>Phase 4: .pbit, audit report &amp; PBIP bundle</span>
                                     </div>
                                 </div>
                                 <span class="agent-badge-tag" id="badge-agent-gen">IDLE</span>
@@ -453,7 +462,7 @@
                             <div class="art-icon"><i class="fa-solid fa-file-shield"></i></div>
                             <div class="art-details">
                                 <h3>MIGRATION_AUDIT_REPORT.md</h3>
-                                <p>Executive compliance audit report generated by AutoGen Orchestrator.</p>
+                                <p>Compliance audit report written by the migration engine during the run.</p>
                                 <div class="art-meta">Size: 2.6 KB • Compliance Log</div>
                             </div>
                             <button class="btn-download" id="artifact-audit-btn">
@@ -477,8 +486,8 @@
             <section id="tab-agents" class="tab-pane">
                 <!-- AGENTS OVERVIEW (landing pane for the group) -->
                 <div id="sub-agents-overview" class="subtab-pane active">
-                    <h2>AI Agents</h2>
-                    <p class="tab-desc">Four autonomous <code>AssistantAgents</code> run the migration end to end. Open one to see its KPIs and output tables.</p>
+                    <h2>Migration engine phases</h2>
+                    <p class="tab-desc">The engine in <code>cli/ai_qvf_to_powerbi.py</code> runs these four phases over the .qvf binary. Open one to see its KPIs, output tables and the log lines that phase really printed.</p>
 
                     <div class="agent-card-grid">
                         <button type="button" class="agent-card" data-subtab="sub-agent-assess">
@@ -486,7 +495,7 @@
                             <span class="agent-card-body">
                                 <span class="agent-card-phase">Phase 1</span>
                                 <span class="agent-card-title">Assessment</span>
-                                <span class="agent-card-desc">Load-script analysis, volumetrics &amp; PII audit</span>
+                                <span class="agent-card-desc">Reads the .qvf binary: load script, schema and sheet inventory</span>
                             </span>
                             <span class="agent-card-foot">
                                 <span class="nav-agent-state" id="card-state-assess">idle</span>
@@ -499,7 +508,7 @@
                             <span class="agent-card-body">
                                 <span class="agent-card-phase">Phase 2</span>
                                 <span class="agent-card-title">Parsing</span>
-                                <span class="agent-card-desc">Binary QVF schema, data model &amp; sheet volumetrics</span>
+                                <span class="agent-card-desc">Builds model.bim — tables, columns and DAX measures</span>
                             </span>
                             <span class="agent-card-foot">
                                 <span class="nav-agent-state" id="card-state-parse">idle</span>
@@ -512,7 +521,7 @@
                             <span class="agent-card-body">
                                 <span class="agent-card-phase">Phase 3</span>
                                 <span class="agent-card-title">Mapping</span>
-                                <span class="agent-card-desc">Qlik expression &rarr; DAX translation and visual mapping</span>
+                                <span class="agent-card-desc">Lays out report pages and visuals</span>
                             </span>
                             <span class="agent-card-foot">
                                 <span class="nav-agent-state" id="card-state-map">idle</span>
@@ -524,8 +533,8 @@
                             <span class="agent-live-avatar agent-card-avatar" style="background: linear-gradient(135deg, #10b981, #047857);"><i class="fa-solid fa-boxes-packing"></i></span>
                             <span class="agent-card-body">
                                 <span class="agent-card-phase">Phase 4</span>
-                                <span class="agent-card-title">Report generation</span>
-                                <span class="agent-card-desc">Microsoft Fabric PBIP / PBIT artifact builder</span>
+                                <span class="agent-card-title">Report Generation</span>
+                                <span class="agent-card-desc">Writes .pbit, the audit report and the PBIP bundle</span>
                             </span>
                             <span class="agent-card-foot">
                                 <span class="nav-agent-state" id="card-state-gen">idle</span>
@@ -544,8 +553,8 @@
                         <div class="agent-detail-identity">
                             <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fa-solid fa-user-shield"></i></div>
                             <div>
-                                <h2>AssessmentAgent</h2>
-                                <p class="agent-detail-role">Phase 1 &middot; Load-script analysis, volumetrics &amp; PII audit</p>
+                                <h2>Assessment</h2>
+                                <p class="agent-detail-role">Phase 1 &middot; Reads the .qvf binary: load script, schema and sheet inventory</p>
                             </div>
                         </div>
                         <div class="agent-detail-status">
@@ -570,8 +579,8 @@
                         <div class="agent-detail-identity">
                             <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #06b6d4, #0891b2);"><i class="fa-solid fa-diagram-project"></i></div>
                             <div>
-                                <h2>ReportParsingAgent</h2>
-                                <p class="agent-detail-role">Phase 2 &middot; Binary QVF schema, data model &amp; sheet volumetrics</p>
+                                <h2>Parsing</h2>
+                                <p class="agent-detail-role">Phase 2 &middot; Builds model.bim — tables, columns and DAX measures</p>
                             </div>
                         </div>
                         <div class="agent-detail-status">
@@ -596,8 +605,8 @@
                         <div class="agent-detail-identity">
                             <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);"><i class="fa-solid fa-brain"></i></div>
                             <div>
-                                <h2>MappingAgent</h2>
-                                <p class="agent-detail-role">Phase 3 &middot; Qlik expression &rarr; DAX translation and visual mapping</p>
+                                <h2>Mapping</h2>
+                                <p class="agent-detail-role">Phase 3 &middot; Lays out report pages and visuals</p>
                             </div>
                         </div>
                         <div class="agent-detail-status">
@@ -622,8 +631,8 @@
                         <div class="agent-detail-identity">
                             <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #10b981, #047857);"><i class="fa-solid fa-boxes-packing"></i></div>
                             <div>
-                                <h2>ReportGenerationAgent</h2>
-                                <p class="agent-detail-role">Phase 4 &middot; Microsoft Fabric PBIP / PBIT artifact builder</p>
+                                <h2>Report Generation</h2>
+                                <p class="agent-detail-role">Phase 4 &middot; Writes .pbit, the audit report and the PBIP bundle</p>
                             </div>
                         </div>
                         <div class="agent-detail-status">
@@ -642,8 +651,8 @@
 
             <!-- TAB: JOB HISTORY -->
             <section id="tab-history" class="tab-pane">
-                <h2>Migration History</h2>
-                <p class="tab-desc">Audit trail of all AI Agents multi-agent execution runs</p>
+                <h2>Autonomous Migration Job History</h2>
+                <p class="tab-desc">Audit trail of migration engine runs</p>
                 
                 <div class="table-container">
                     <table class="custom-table">
@@ -667,6 +676,6 @@
         </main>
     </div>
 
-    <script src="script.js?v=20260805_resourceid_v1"></script>
+    <script src="script.js?v=20260805_server_export_v1"></script>
 </body>
 </html>

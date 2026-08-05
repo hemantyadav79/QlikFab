@@ -213,7 +213,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // ----------------------------------------------------------------------
     // 1b. AGENT DETAIL TABS
     //
-    // Each AutoGen agent gets its own navigation entry and pane. A pane only
+    // Each engine phase gets its own navigation entry and pane. A pane only
     // ever renders what the registry actually holds for the current upload —
     // when nothing is uploaded it says so rather than showing zeroed metrics
     // that would read as a real result.
@@ -249,9 +249,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const AGENT_DEFS = [
-        { id: "assess", name: "AssessmentAgent", phase: "Phase 1" },
+        { id: "assess", name: "Extract", phase: "Phase 1" },
         { id: "parse", name: "ReportParsingAgent", phase: "Phase 2" },
-        { id: "map", name: "MappingAgent", phase: "Phase 3" },
+        { id: "map", name: "Report", phase: "Phase 3" },
         { id: "gen", name: "ReportGenerationAgent", phase: "Phase 4" }
     ];
 
@@ -334,7 +334,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (!apps.length) {
             kpiHost.innerHTML = "";
-            bodyHost.innerHTML = agentEmptyState("AssessmentAgent");
+            bodyHost.innerHTML = agentEmptyState("Assessment");
             return;
         }
 
@@ -405,13 +405,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function renderParseAgentTab(apps) {
-        const kpiHost = document.getElementById("kpi-agent-parse");
-        const bodyHost = document.getElementById("detail-body-parse");
+        const kpiHost = document.getElementById("kpi-agent-map");
+        const bodyHost = document.getElementById("detail-body-map");
         if (!kpiHost || !bodyHost) return;
 
         if (!apps.length) {
             kpiHost.innerHTML = "";
-            bodyHost.innerHTML = agentEmptyState("ReportParsingAgent");
+            bodyHost.innerHTML = agentEmptyState("Mapping");
             return;
         }
 
@@ -468,19 +468,19 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
             <div class="table-container">
                 <h3>Resolved schema fields</h3>
-                <p class="agent-section-note">Highlighted chips matched a PII name pattern raised by <code>AssessmentAgent</code>.</p>
+                <p class="agent-section-note">Highlighted chips matched a PII name pattern raised in the <b>Assessment</b> phase.</p>
                 ${schemaBlocks}
             </div>`;
     }
 
     function renderMapAgentTab(apps) {
-        const kpiHost = document.getElementById("kpi-agent-map");
-        const bodyHost = document.getElementById("detail-body-map");
+        const kpiHost = document.getElementById("kpi-agent-parse");
+        const bodyHost = document.getElementById("detail-body-parse");
         if (!kpiHost || !bodyHost) return;
 
         if (!apps.length) {
             kpiHost.innerHTML = "";
-            bodyHost.innerHTML = agentEmptyState("MappingAgent");
+            bodyHost.innerHTML = agentEmptyState("Parsing");
             return;
         }
 
@@ -510,7 +510,7 @@ document.addEventListener("DOMContentLoaded", () => {
         bodyHost.innerHTML = `
             <div class="table-container">
                 <h3>DAX translation queue</h3>
-                <p class="agent-section-note">Every Qlik expression this agent rewrote, with the confidence the translation carried. Anything below the bar is flagged <b>Needs Review</b> rather than dropped.</p>
+                <p class="agent-section-note">Measures written into the generated semantic model, with the confidence each translation carried. Anything below the bar is flagged <b>Needs Review</b> rather than dropped.</p>
                 <table class="custom-table">
                     <thead>
                         <tr><th>App</th><th>Qlik expression</th><th>Translated DAX</th><th>Confidence</th><th>Status</th></tr>
@@ -527,7 +527,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (!apps.length) {
             kpiHost.innerHTML = "";
-            bodyHost.innerHTML = agentEmptyState("ReportGenerationAgent");
+            bodyHost.innerHTML = agentEmptyState("Report Generation");
             return;
         }
 
@@ -538,7 +538,7 @@ document.addEventListener("DOMContentLoaded", () => {
             kpiBox(built ? "Projects built" : "Projects to build", `${apps.length}`, "One PBIP project per app") +
             kpiBox("Report pages", partialCount(totals.sheets, totals), partialNote(totals, "One per Qlik sheet")) +
             kpiBox("Visuals on canvas", partialCount(totals.charts, totals), partialNote(totals, "Mapped from Qlik charts")) +
-            kpiBox("Measures embedded", `${totals.measures}`, "From MappingAgent");
+            kpiBox("Measures embedded", `${totals.measures}`, "From the generated model.bim");
 
         const rows = apps.map(app => `
             <tr>
@@ -658,7 +658,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // 2. SIDEBAR NAVIGATION
     //
     // Two levels: top-level tabs, and — under the Agents group — one sub-pane per
-    // AutoGen agent plus the overview that lists them. Every move through either
+    // engine phase plus the overview that lists them. Every move through either
     // level is pushed onto a history stack so the Back control in the header can
     // retrace it, which is why all navigation goes through goTo() rather than
     // touching classes directly.
@@ -1959,6 +1959,21 @@ ${(appData.gaps && appData.gaps.length)
                           "2. Open the extracted folder and double-click the small '.pbip' text file inside.\n\n") +
                       "★ FOR 1-CLICK INSTANT OPENING WITHOUT UNZIPPING:\n" +
                       "Click 'Download .PBIT (Instant Open)' instead! .PBIT files open directly on single click without unzipping!");
+                // A file the engine migrated has a real bundle on the server — the
+                // one Power BI will actually open. Only apps the engine never
+                // touched fall back to the browser-assembled project.
+                const fromEngine = batchApps.filter(a => a.engineRunId);
+                if (fromEngine.length) {
+                    fromEngine.forEach(a => {
+                        const link = document.createElement("a");
+                        link.href = `/api/runs/${a.engineRunId}/download`;
+                        link.download = a.artifactName || `${a.name}_PBIP.zip`;
+                        document.body.appendChild(link);
+                        link.click();
+                        link.remove();
+                    });
+                    return;
+                }
                 if (isBatch) {
                     downloadPbipBatch(batchApps);
                 } else {
@@ -2031,98 +2046,39 @@ ${(appData.gaps && appData.gaps.length)
             const pbipName = `${cleanName}.pbip`;
             const projectDir = `${cleanName.replace(/\s+/g, '_')}_PowerBI_Project/`;
 
-            const estCols = Math.max(15, Math.floor(file.size / 25000)) + " Columns";
-            const estCharts = "2 Sheets / " + Math.max(6, Math.floor(file.size / 150000)) + " Charts";
-
-            const reader = new FileReader();
-            reader.onload = function(evt) {
-                const buffer = evt.target.result;
-                const uint8 = new Uint8Array(buffer);
-                const discoveredWords = new Set();
-                let currWord = "";
-                for (let i = 0; i < uint8.length; i++) {
-                    const c = uint8[i];
-                    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95) {
-                        currWord += String.fromCharCode(c);
-                    } else {
-                        if (currWord.length >= 4 && currWord.length <= 30 && !/^[0-9]+$/.test(currWord) && /^[A-Z]/i.test(currWord)) {
-                            discoveredWords.add(currWord);
-                        }
-                        currWord = "";
-                    }
-                }
-
-                // Combine filename tokens with binary discovered tokens to form high-confidence real Qlik columns
-                const nameWords = cleanName.split(/[^a-zA-Z0-9]/).filter(w => w.length >= 3 && !/^(data|table|source|typed|model|query|qlik|true|false|null)$/i.test(w)).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
-                const candidateCols = [];
-                const seenUploadCols = new Set();
-                const addCandidate = (colName) => {
-                    let cName = colName;
-                    if (/^(data|table|source|typed|model|query|qlik|true|false|null)$/i.test(cName)) return;
-                    if (!seenUploadCols.has(cName.toLowerCase())) {
-                        seenUploadCols.add(cName.toLowerCase());
-                        candidateCols.push(cName);
-                    }
-                };
-                nameWords.forEach(w => {
-                    addCandidate(w);
-                    addCandidate(w + "_ID");
-                    addCandidate(w + "_Category");
-                    addCandidate(w + "_Rating");
-                });
-                discoveredWords.forEach(w => {
-                    if (candidateCols.length < 16) {
-                        addCandidate(w);
-                    }
-                });
-                if (candidateCols.length === 0) {
-                    ["Category", "Rating", "ID", "Date", "Status", "Amount", "City", "Region"].forEach(c => addCandidate(c));
-                }
-
-                const numCol = candidateCols.find(c => /rating|score|amount|sales|val|price|total|count|num/i.test(c)) || candidateCols[candidateCols.length - 1];
-                const catCol = candidateCols.find(c => /category|type|genre|city|state|region|status/i.test(c)) || candidateCols[0];
-                const idCol = candidateCols.find(c => /merchant|id|code|key|name/i.test(c)) || candidateCols[0];
-
-                const c1 = catCol;
-                const c2 = idCol;
-                const c3 = numCol;
-                const c4 = candidateCols.length > 1 ? candidateCols[1] : c1;
-
-                APP_REGISTRY[filename] = {
-                    name: cleanName,
-                    filename: filename,
-                    size: displaySize,
-                    sizeBytes: file.size,
-                    fieldsCnt: estCols,
-                    visualsCnt: estCharts,
-                    pbitName: pbitName,
-                    pbipName: pbipName,
-                    projectDir: projectDir,
-                    pbitSize: "6.2 KB",
-                    sheets: [
-                        { name: `${cleanName} Summary`, chartType: "KPI Cards / Bar Chart", title: `${cleanName} KPI Executive Dashboard`, dims: `${c1}, ${c2}`, meas: `Avg(${c3}), Count(${c4})`, status: "100% Schema Mapped" },
-                        { name: `${cleanName} Analytics`, chartType: "Clustered Column", title: `${cleanName} Categorical Trend Analysis`, dims: `${c2}, ${c1}`, meas: `Avg(${c3}), Count(${c4})`, status: "Mapped to Power BI Table" }
-                    ],
-                    daxQueue: [
-                        { expr: `Avg ${c3}`, dax: `AVERAGE('QlikTable'[${c3}])`, conf: "99.9%", status: "Auto-Approved" },
-                        { expr: `Count ${c4}`, dax: `COUNTA('QlikTable'[${c4}])`, conf: "99.8%", status: "Auto-Approved" },
-                        { expr: `Distinct ${c1}`, dax: `DISTINCTCOUNT('QlikTable'[${c1}])`, conf: "99.5%", status: "Auto-Approved" }
-                    ],
-                    columns: candidateCols
-                };
-
-                if (bundledSelect && !Array.from(bundledSelect.options).some(o => o.value === filename)) {
-                    const opt = document.createElement("option");
-                    opt.value = filename;
-                    opt.textContent = `${filename} (${displaySize})`;
-                    bundledSelect.appendChild(opt);
-                }
-                resolve(filename);
+            // Nothing about the app's contents is known until the migration engine
+            // has parsed the binary, so nothing about them is stated here. This used
+            // to estimate the column count from the file's byte size and invent
+            // column names by scanning the binary for ASCII words — both were
+            // guesses presented as extracted schema. The real values arrive from
+            // the engine run and overwrite these placeholders.
+            APP_REGISTRY[filename] = {
+                name: cleanName,
+                filename: filename,
+                size: displaySize,
+                sizeBytes: file.size,
+                fieldsCnt: "Not read yet",
+                visualsCnt: "Not read yet",
+                unknownVisuals: true,
+                pbitName: pbitName,
+                pbipName: pbipName,
+                projectDir: projectDir,
+                pbitSize: "generated by the engine",
+                sheets: [],
+                daxQueue: [],
+                columns: [],
+                // Kept so the run can hand the actual bytes to the engine.
+                sourceFile: file,
+                gaps: ["Contents not read yet — start the migration to run the engine over this file."]
             };
-            reader.onerror = function() {
-                resolve(null);
-            };
-            reader.readAsArrayBuffer(file);
+
+            if (bundledSelect && !Array.from(bundledSelect.options).some(o => o.value === filename)) {
+                const opt = document.createElement("option");
+                opt.value = filename;
+                opt.textContent = `${filename} (${displaySize})`;
+                bundledSelect.appendChild(opt);
+            }
+            resolve(filename);
           });
         }
 
@@ -2320,6 +2276,265 @@ ${(appData.gaps && appData.gaps.length)
     const consoleBadge = document.getElementById("console-status-badge");
     const metricsRow = document.getElementById("console-metrics-row");
 
+    // ----------------------------------------------------------------------
+    // 7b. REAL ENGINE RUNS
+    // The four panes used to be filled by setTimeout on a fixed script while the
+    // browser built its own output. They now show what cli/ai_qvf_to_powerbi.py
+    // actually printed: the file is posted to the local relay, the engine runs
+    // there over the real .qvf binary, and every line below came off its stdout.
+    // ----------------------------------------------------------------------
+
+    // The engine's four real phases, mapped onto the four existing panes.
+    const PHASE_TO_PANE = { extract: "assess", model: "parse", report: "map", package: "gen" };
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // A stale dev_server has no /api/runs route and answers without reading the
+    // uploaded body, which the browser reports as a bare "Failed to fetch". That
+    // names the symptom, not the cause, so it is translated here.
+    const ENGINE_UNREACHABLE = [
+        "Could not reach the migration engine.",
+        "",
+        "The page is being served, but POST /api/runs did not complete. The usual",
+        "cause is a dev_server.py started before the engine route existed — Python",
+        "does not reload a running process.",
+        "",
+        "Stop it (Ctrl+C) and start it again:",
+        "  python dev_server.py 5173",
+        "",
+        "To confirm the route is live, run this in the console — it should print 202:",
+        "  fetch('/api/runs?name=probe.qvf',{method:'POST',body:new Blob([1])}).then(r=>console.log(r.status))"
+    ].join("\n");
+
+    // A live Qlik Cloud app is exported and run entirely on the server. The .qvf
+    // used to be pulled into the page and posted back, which meant tens of
+    // megabytes crossing the browser twice — the transfer that kept dropping.
+    async function runEngineOnQlikApp(app, onLine) {
+        const params = new URLSearchParams({
+            tenant: qlikConnection.baseUrl,
+            appId: app.appId,
+            name: app.name
+        });
+        let started;
+        try {
+            started = await fetch(`/api/runs/from-qlik?${params}`, {
+                method: "POST",
+                headers: qlikHeaders()
+            });
+        } catch (err) {
+            throw new Error(ENGINE_UNREACHABLE);
+        }
+        return finishEngineRun(started, onLine);
+    }
+
+    async function runEngineOnFile(file, onLine) {
+        let started;
+        try {
+            started = await fetch(`/api/runs?name=${encodeURIComponent(file.name)}`, {
+                method: "POST",
+                body: file
+            });
+        } catch (err) {
+            throw new Error(ENGINE_UNREACHABLE);
+        }
+        return finishEngineRun(started, onLine);
+    }
+
+    async function finishEngineRun(started, onLine) {
+        if (!started.ok) {
+            let detail = `HTTP ${started.status}`;
+            try {
+                const body = await started.json();
+                if (body.error) detail = body.error;
+            } catch (e) { /* keep the status */ }
+            // A 404 means the page is being served by something without the engine
+            // route, which is worth saying plainly rather than as a bare status.
+            if (started.status === 404) {
+                throw new Error(ENGINE_UNREACHABLE);
+            }
+            throw new Error(detail);
+        }
+
+        let run = await started.json();
+        let since = 0;
+        // "exporting" is the server pulling the .qvf from the tenant, which can
+        // take minutes on a large app and must not be read as finished.
+        while (run.status === "queued" || run.status === "running" || run.status === "exporting") {
+            await sleep(600);
+            const polled = await fetch(`/api/runs/${run.id}?since=${since}`);
+            if (!polled.ok) throw new Error(`Lost contact with the run (HTTP ${polled.status}).`);
+            run = await polled.json();
+            (run.lines || []).forEach(onLine);
+            since = run.totalLines;
+        }
+        // Drain anything written between the last poll and the process exiting.
+        if (run.totalLines > since) {
+            const final = await fetch(`/api/runs/${run.id}?since=${since}`);
+            if (final.ok) {
+                const tail = await final.json();
+                (tail.lines || []).forEach(onLine);
+                run = tail;
+            }
+        }
+        return run;
+    }
+
+    // Rewrites a registry entry from what the engine genuinely produced. Counts
+    // it did not report stay unreported rather than being filled in.
+    function applyEngineSummary(app, run) {
+        const summary = run.summary || {};
+        app.engineRunId = run.id;
+        app.artifactName = run.artifact || null;
+        app.auditReport = summary.auditReport || null;
+
+        const tables = summary.tables || [];
+        app.columns = tables.reduce((acc, t) => acc.concat(t.columns || []), []);
+        app.tablesCnt = tables.length;
+        app.fieldsCnt = summary.columnCount === null || summary.columnCount === undefined
+            ? "Not reported by the engine"
+            : `${summary.columnCount} Columns`;
+
+        const pages = summary.pages || [];
+        if (summary.visualCount === null || summary.visualCount === undefined) {
+            app.visualsCnt = "Not reported by the engine";
+            app.unknownVisuals = true;
+        } else {
+            app.visualsCnt = `${pages.length} Sheets / ${summary.visualCount} Charts`;
+            app.unknownVisuals = false;
+        }
+
+        // One row per generated report page, described by what the engine wrote.
+        app.sheets = pages.map(page => ({
+            name: page.name,
+            chartType: `${page.visualCount} visual(s)`,
+            title: page.name,
+            dims: "see model.bim",
+            meas: "see model.bim",
+            status: "Generated by the engine"
+        }));
+
+        // Real DAX, straight out of the generated semantic model.
+        app.daxQueue = tables.reduce((acc, t) => acc.concat((t.measures || []).map(m => ({
+            expr: `${t.name} measure`,
+            dax: m.expression || m.name,
+            conf: "n/a — rule-based",
+            status: "Generated"
+        }))), []);
+
+        app.gaps = [];
+        if (!tables.length) app.gaps.push("No tables were found in the generated semantic model.");
+        if (!pages.length) app.gaps.push("The engine generated no report pages for this app.");
+        if (!app.daxQueue.length) app.gaps.push("No DAX measures were written into the generated model.");
+        return app;
+    }
+
+    // Drives one engine run per uploaded file and reports exactly what came back.
+    async function runRealEngine(btnElem, engineApps, runApps, originalText, runStartedAt, appendLogToAgent, setAgentBadge) {
+        const reached = new Set();
+        const completed = [];
+        const failed = [];
+
+        for (let i = 0; i < engineApps.length; i++) {
+            const app = engineApps[i];
+            btnElem.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Running engine ${i + 1} of ${engineApps.length}…`;
+
+            try {
+                const onLine = (line) => {
+                    const pane = PHASE_TO_PANE[line.phase] || "assess";
+                    if (line.phase && !reached.has(line.phase)) {
+                        reached.add(line.phase);
+                        setAgentBadge(PHASE_TO_PANE[line.phase], "RUNNING...", "running");
+                    }
+                    // The engine's own stamp for this line. Falling back to arrival
+                    // time would collapse a polled batch onto one instant.
+                    const stamp = typeof line.t === "number" ? line.t.toFixed(1) : "—";
+                    appendLogToAgent(pane, stamp, escapeHtml(line.text));
+                };
+
+                // An upload already holds its bytes; a cloud app is exported by the
+                // server, so the file never passes through the page.
+                const run = app.sourceFile
+                    ? await runEngineOnFile(app.sourceFile, onLine)
+                    : await runEngineOnQlikApp(app, onLine);
+
+                if (run.status === "completed") {
+                    applyEngineSummary(app, run);
+                    completed.push(app);
+                    (run.reached || []).forEach(p => setAgentBadge(PHASE_TO_PANE[p], "COMPLETED", "completed"));
+                } else {
+                    failed.push({ name: app.filename, message: run.error || `Engine status: ${run.status}` });
+                    appendLogToAgent("gen", "—", `[FAILED] ${escapeHtml(run.error || run.status)}`);
+                }
+            } catch (err) {
+                console.error(err);
+                failed.push({ name: app.filename, message: err.message });
+                appendLogToAgent("gen", "—", `[FAILED] ${escapeHtml(err.message)}`);
+            }
+        }
+
+        if (consoleBadge) {
+            const ok = completed.length && !failed.length;
+            consoleBadge.className = `console-status ${ok ? "success" : "error"}`;
+            consoleBadge.innerHTML = ok
+                ? `<i class="fa-solid fa-check"></i> COMPLETED`
+                : `<i class="fa-solid fa-triangle-exclamation"></i> ${completed.length} OK / ${failed.length} FAILED`;
+        }
+
+        if (metricsRow && completed.length) {
+            metricsRow.classList.remove("hidden");
+            const totals = completed.reduce((acc, a) => {
+                const parts = String(a.visualsCnt).split("/");
+                acc.sheets += a.unknownVisuals ? 0 : parseInt(parts[0], 10) || 0;
+                acc.charts += a.unknownVisuals ? 0 : parseInt((parts[1] || ""), 10) || 0;
+                acc.dax += a.daxQueue.length;
+                return acc;
+            }, { sheets: 0, charts: 0, dax: 0 });
+            const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+            set("metric-sheets", `${totals.sheets} Pages`);
+            set("metric-visuals", `${totals.charts} Charts`);
+            set("metric-dax", `${totals.dax} in model.bim`);
+            set("metric-discrepancy", "Not computed — needs a source/target value comparison");
+        }
+
+        const elapsed = (Date.now() - runStartedAt) / 1000;
+        completed.forEach(app => recordNewJobRun(app, elapsed));
+
+        if (completed.length) {
+            // This resets every phase badge to IDLE and clears the run summary, so it
+            // has to happen before the badges are written, not after.
+            refreshAllTabsForActiveQvf(completed[0], completed.map(a => a.filename));
+            lastRunSummary = { at: new Date().toLocaleTimeString(), count: completed.length };
+            renderAgentDetailTabs();
+        }
+
+        // Stated last so nothing overwrites them. A phase the engine never reached
+        // says so rather than being left looking idle or, worse, complete.
+        ["extract", "model", "report", "package"].forEach(phase => {
+            const hit = reached.has(phase);
+            setAgentBadge(PHASE_TO_PANE[phase], hit ? "COMPLETED" : "NOT REACHED", hit ? "completed" : "");
+        });
+
+        btnElem.disabled = false;
+        btnElem.classList.remove("running-btn");
+        if (completed.length) {
+            btnElem.classList.add("success-btn");
+            btnElem.innerHTML = `<i class="fa-solid fa-circle-check"></i> Engine finished — View Artifacts -&gt;`;
+        } else {
+            btnElem.innerHTML = originalText;
+        }
+
+        if (failed.length) {
+            alert([
+                `${failed.length} of ${engineApps.length} file(s) did not migrate:`,
+                "",
+                failed.map(f => `• ${f.name}\n  ${f.message}`).join("\n\n"),
+                completed.length ? `\n${completed.length} file(s) did complete and are in Artifacts.` : ""
+            ].join("\n"));
+        }
+    }
+
     async function executeMigrationFlow(btnElem) {
         if (!btnElem) return;
         // After a run the button turns into "View Artifacts"; its click listener is
@@ -2393,8 +2608,34 @@ ${(appData.gaps && appData.gaps.length)
                         }
                         loadedKeys.push(key);
                     } catch (err) {
+                        // The engine now exports the app and reads the .qvf itself, so
+                        // it reports strictly more than this endpoint does. A refusal
+                        // here is recorded and the app still goes to the engine rather
+                        // than being dropped on the weaker source's say-so.
                         console.error(err);
-                        failures.push({ name: app.name, message: err.message });
+                        const key = `${app.name} (Qlik Cloud)`;
+                        APP_REGISTRY[key] = {
+                            name: app.name,
+                            filename: key,
+                            source: "qlik-cloud",
+                            appId: app.id,
+                            safeName: String(app.name).replace(/[^a-zA-Z0-9 _-]/g, "_").trim() || app.id,
+                            size: "Not reported",
+                            sizeBytes: 0,
+                            fieldsCnt: "Not read yet",
+                            visualsCnt: "Not read yet",
+                            unknownVisuals: true,
+                            pbitName: `${app.name}.pbit`,
+                            pbipName: `${app.name}.pbip`,
+                            projectDir: `${String(app.name).replace(/\s+/g, "_")}_PowerBI_Project/`,
+                            pbitSize: "generated by the engine",
+                            sheets: [],
+                            daxQueue: [],
+                            columns: [],
+                            gaps: [`The data-model endpoint refused this app: ${err.message.split("\n")[0]}`]
+                        };
+                        if (fabricTarget) APP_REGISTRY[key].fabricTarget = fabricTarget;
+                        loadedKeys.push(key);
                     }
                 }
             } finally {
@@ -2437,7 +2678,7 @@ ${(appData.gaps && appData.gaps.length)
         const originalText = btnElem.innerHTML;
         btnElem.classList.remove("success-btn");
         btnElem.classList.add("running-btn");
-        btnElem.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Running AutoGen Multi-Agent Migration...`;
+        btnElem.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Running migration engine…`;
 
         if (consoleCard) {
             consoleCard.classList.remove("hidden");
@@ -2481,15 +2722,24 @@ ${(appData.gaps && appData.gaps.length)
 
         const setAgentBadge = (id, label, styleClass) => setAgentStatus(id, label, styleClass);
 
-        // Dynamic phase messages customized to the .qvf files in this run. Every
-        // uploaded file is migrated, so the console reports each one by name rather
-        // than implying only the active file was processed.
         const runApps = getBatchApps();
         if (!runApps.length) runApps.push(currentActiveQvf);
-        const totalDax = runApps.reduce((n, a) => n + a.daxQueue.length, 0);
 
-        // 1. AssessmentAgent (Phase 1)
-        setTimeout(() => appendLogToAgent("assess", "0.0", `[SYSTEM] AutoGen AssessmentAgent initialized.`), 0);
+        // Both sources reach the engine: an upload already holds its bytes, and a
+        // live Qlik Cloud app is exported from the tenant first. Only an app with
+        // neither a file nor an id has nothing to run on.
+        const engineApps = runApps.filter(a => a && (a.sourceFile || a.appId));
+        if (engineApps.length) {
+            await runRealEngine(btnElem, engineApps, runApps, originalText, runStartedAt, appendLogToAgent, setAgentBadge);
+            return;
+        }
+
+        const totalDax = runApps.reduce((n, a) => n + a.daxQueue.length, 0);
+        appendLogToAgent("assess", "0.0", `[SOURCE] Live Qlik Cloud app(s) — read over REST, not through the .qvf engine.`);
+        appendLogToAgent("assess", "0.0", `[SCOPE] REST exposes the data model only; sheets and expressions need a QIX engine session.`);
+
+        // 1. Extract (Phase 1)
+        setTimeout(() => appendLogToAgent("assess", "0.0", `[SYSTEM] Reading Qlik Cloud metadata (REST).`), 0);
         setTimeout(() => appendLogToAgent("assess", "0.6", `[ORCHESTRATOR] ${runApps.length} QVF file(s) queued for migration.`), 600);
         runApps.forEach((app, i) => {
             setTimeout(() => appendLogToAgent("assess", (0.8 + i * 0.1).toFixed(1), `[ORCHESTRATOR] Target QVF ${i + 1}/${runApps.length}: "${app.filename}" (${app.size})`), 800 + i * 100);
@@ -2510,7 +2760,7 @@ ${(appData.gaps && appData.gaps.length)
         });
 
         // 2. ReportParsingAgent (Phase 2)
-        setTimeout(() => appendLogToAgent("parse", "1.5", `[SYSTEM] AutoGen ReportParsingAgent initialized.`), 1500);
+        setTimeout(() => appendLogToAgent("parse", "1.5", `[SYSTEM] Inspecting the returned data model.`), 1500);
         setTimeout(() => appendLogToAgent("parse", "2.2", `[INFO] Extracting binary QVF schema & data model tables...`), 2200);
         runApps.forEach((app, i) => {
             setTimeout(() => appendLogToAgent("parse", (2.4 + i * 0.1).toFixed(1), `[OK] ${app.filename}: ${app.fieldsCnt}, ${app.visualsCnt}`), 2400 + i * 100);
@@ -2520,8 +2770,8 @@ ${(appData.gaps && appData.gaps.length)
             setAgentBadge("parse", "COMPLETED", "completed");
         }, 2900);
 
-        // 3. MappingAgent (Phase 3)
-        setTimeout(() => appendLogToAgent("map", "2.8", `[SYSTEM] AutoGen MappingAgent initialized.`), 2800);
+        // 3. Report (Phase 3)
+        setTimeout(() => appendLogToAgent("map", "2.8", `[SYSTEM] Mapping the data model to Power BI.`), 2800);
         setTimeout(() => appendLogToAgent("map", "3.6", `[INFO] Translating Qlik expressions to Power BI DAX formulas...`), 3600);
         setTimeout(() => {
             appendLogToAgent("map", "4.5", `[SUCCESS] Mapped ${totalDax} DAX measures across ${runApps.length} app(s) (100% AI score).`);
@@ -2529,7 +2779,7 @@ ${(appData.gaps && appData.gaps.length)
         }, 4500);
 
         // 4. ReportGenerationAgent (Phase 4)
-        setTimeout(() => appendLogToAgent("gen", "4.2", `[SYSTEM] AutoGen ReportGenerationAgent initialized.`), 4200);
+        setTimeout(() => appendLogToAgent("gen", "4.2", `[SYSTEM] Assembling the project in the browser.`), 4200);
         setTimeout(() => appendLogToAgent("gen", "5.1", `[INFO] Building Microsoft Fabric PBIP 4.0 & PBIT template...`), 5100);
         runApps.forEach((app, i) => {
             setTimeout(() => appendLogToAgent("gen", (5.4 + i * 0.15).toFixed(2), `[OK] Saved: ${app.pbitName} + ${app.pbipName} in ${app.projectDir}`), 5400 + i * 150);
