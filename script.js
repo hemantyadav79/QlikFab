@@ -562,7 +562,9 @@ document.addEventListener("DOMContentLoaded", () => {
                     <tbody>${targeted.map(a => `
                         <tr>
                             <td>${escapeHtml(a.name)}</td>
-                            <td><b>${escapeHtml(a.fabricTarget.workspace)}</b></td>
+                            <td><b>${escapeHtml(a.fabricTarget.workspace)}</b>${a.fabricTarget.workspaceId
+                                ? `<br><span class="kpi-sub">${escapeHtml(a.fabricTarget.workspaceId)}</span>`
+                                : ""}</td>
                             <td>${a.fabricTarget.capacity ? escapeHtml(a.fabricTarget.capacity) : "<span class=\"kpi-sub\">workspace default</span>"}</td>
                             <td>${a.fabricTarget.prefix ? escapeHtml(a.fabricTarget.prefix) : "<span class=\"kpi-sub\">app name</span>"}</td>
                         </tr>`).join("")}
@@ -1727,6 +1729,7 @@ ${appData.daxQueue.length
 ## 4. Intended Destination
 ${appData.fabricTarget
     ? `- Microsoft Fabric workspace: ${appData.fabricTarget.workspace}
+- Workspace ID: ${appData.fabricTarget.workspaceId || "not resolved (entered by name)"}
 - Capacity: ${appData.fabricTarget.capacity || "workspace default"}
 - Item name prefix: ${appData.fabricTarget.prefix || appData.name}
 - NOT PUBLISHED: the artifacts were generated for download. Nothing was written to this workspace by the migration client.`
@@ -2322,19 +2325,19 @@ ${(appData.gaps && appData.gaps.length)
                 return;
             }
 
-            const workspaceInput = document.getElementById("fabric-workspace");
-            const workspace = workspaceInput ? workspaceInput.value.trim() : "";
-            if (!workspace) {
-                alert("Please enter the Microsoft Fabric workspace name or ID to migrate into.");
-                if (workspaceInput) workspaceInput.focus();
+            const destination = readFabricTarget();
+            if (!destination.workspace) {
+                alert(destination.usingPicker
+                    ? "Please select the Microsoft Fabric workspace to migrate into."
+                    : "Please connect to Microsoft Fabric, or enter the workspace name or ID to migrate into.");
+                if (destination.focusTarget) destination.focusTarget.focus();
                 return;
             }
-            const capacityInput = document.getElementById("fabric-capacity");
-            const prefixInput = document.getElementById("fabric-prefix");
             const fabricTarget = {
-                workspace: workspace,
-                capacity: capacityInput ? capacityInput.value.trim() : "",
-                prefix: prefixInput ? prefixInput.value.trim() : ""
+                workspace: destination.workspace,
+                workspaceId: destination.workspaceId,
+                capacity: destination.capacity,
+                prefix: destination.prefix
             };
 
             // Read the app's real data model before anything is shown as migrated.
@@ -2757,6 +2760,280 @@ ${(appData.gaps && appData.gaps.length)
                 btnTestConnection.disabled = false;
             }
         });
+    }
+
+    // ----------------------------------------------------------------------
+    // 8c. LIVE MICROSOFT FABRIC CONNECTION
+    // Exchanges an Entra service principal for a token, then lists the real
+    // workspaces it can reach so the destination is picked rather than typed.
+    // Credentials are used for the calls below and never persisted.
+    // ----------------------------------------------------------------------
+    // Session-only, same as the Qlik side. Holds the token, not the secret.
+    let fabricConnection = null;
+
+    const FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1";
+
+    // api.fabric.microsoft.com sends no CORS headers, so a direct call from the
+    // page is blocked before it leaves the browser. dev_server.py relays it.
+    function fabricRequestUrl(absoluteUrl) {
+        return `${window.location.origin}/fabric-proxy?target=${encodeURIComponent(absoluteUrl)}`;
+    }
+
+    // The relay is mandatory here: the client-credentials flow is server-only
+    // (Entra rejects a confidential-client secret sent from a browser origin),
+    // so opening index.html straight off disk cannot reach Fabric at all.
+    function fabricRelayAvailable() {
+        return window.location.protocol !== "file:";
+    }
+
+    // Reports what Entra or Fabric actually said. Both return structured bodies;
+    // showing them beats asserting a cause the response never claimed.
+    async function describeFabricError(response, what) {
+        let raw = "";
+        let body = null;
+        try {
+            raw = (await response.text()).trim();
+            body = raw ? JSON.parse(raw) : null;
+        } catch (e) {
+            body = null;
+        }
+
+        if (body && body.proxyError) {
+            return `The local Fabric relay could not complete the call.\n\n${body.proxyError}`;
+        }
+
+        // Served by a plain static server, which has no /fabric-proxy route.
+        if (response.status === 404 && !body) {
+            return [
+                "The local Fabric relay is not running.",
+                "",
+                "Start the app with the relay so the browser can reach Fabric:",
+                "  python dev_server.py"
+            ].join("\n");
+        }
+
+        const lines = [`${response.status}${response.statusText ? " " + response.statusText : ""} while ${what}.`];
+
+        if (body && body.error_description) {
+            // Entra token endpoint. Its first line names the real cause
+            // (AADSTS7000215 wrong secret, AADSTS700016 wrong client id, ...).
+            lines.push("", "Microsoft Entra ID said:", String(body.error_description).split("\r\n")[0]);
+        } else if (body && (body.message || body.errorCode)) {
+            // Fabric REST error envelope.
+            lines.push("", "Fabric said:", [body.errorCode, body.message].filter(Boolean).join(" — "));
+        } else if (raw) {
+            lines.push("", raw.slice(0, 300));
+        } else {
+            lines.push("", "No error details were returned.");
+        }
+
+        if (response.status === 401 || response.status === 403) {
+            lines.push(
+                "",
+                "Check that the service principal is allowed to use Fabric APIs",
+                "(Fabric Admin portal → Tenant settings → 'Service principals can use",
+                "Fabric APIs') and that it is a member of at least one workspace."
+            );
+        }
+        return lines.join("\n");
+    }
+
+    // One token, client-credentials grant, obtained through the relay.
+    async function fetchFabricToken(credentials) {
+        const response = await fetch(`${window.location.origin}/fabric-token`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(credentials)
+        });
+        if (!response.ok) {
+            throw new Error(await describeFabricError(response, "signing in to Microsoft Entra ID"));
+        }
+        const token = await response.json();
+        if (!token.access_token) {
+            throw new Error("Entra ID returned a response with no access token in it.");
+        }
+        return {
+            accessToken: token.access_token,
+            // Refreshed by re-running Test Connection; the margin keeps a long
+            // session from failing on a token that expires mid-run.
+            expiresAt: Date.now() + (Number(token.expires_in || 3600) - 120) * 1000
+        };
+    }
+
+    // Every workspace the principal can see. The endpoint pages, so a tenant
+    // with more than one page would otherwise show a truncated picker.
+    async function fetchFabricWorkspaces(accessToken) {
+        const headers = { "Authorization": `Bearer ${accessToken}` };
+        let url = `${FABRIC_API_BASE}/workspaces`;
+        const workspaces = [];
+
+        for (let page = 0; page < 20 && url; page++) {
+            const response = await fetch(fabricRequestUrl(url), { method: "GET", headers: headers });
+            if (!response.ok) {
+                throw new Error(await describeFabricError(response, "listing Fabric workspaces"));
+            }
+            const body = await response.json();
+            (body.value || []).forEach(ws => workspaces.push(ws));
+            url = body.continuationToken
+                ? `${FABRIC_API_BASE}/workspaces?continuationToken=${encodeURIComponent(body.continuationToken)}`
+                : null;
+        }
+        return workspaces;
+    }
+
+    // Falls the destination back to a typed name/ID. Used when the relay is not
+    // available, so a run is still possible without the live listing.
+    function enableFabricManualEntry(reason) {
+        const manual = document.getElementById("fabric-workspace-manual");
+        const extras = document.getElementById("fabric-extra-fields");
+        if (manual) manual.style.display = "block";
+        if (extras) extras.style.display = "block";
+        if (reason) {
+            const input = document.getElementById("fabric-workspace");
+            if (input) input.placeholder = "Type the workspace name or ID";
+        }
+    }
+
+    const btnTestFabric = document.getElementById("btn-test-fabric");
+    if (btnTestFabric) {
+        btnTestFabric.addEventListener("click", async () => {
+            const tenantId = (document.getElementById("fabric-tenant-id").value || "").trim();
+            const clientId = (document.getElementById("fabric-client-id").value || "").trim();
+            const clientSecret = document.getElementById("fabric-client-secret").value || "";
+
+            const missing = [
+                ["Tenant (Directory) ID", tenantId],
+                ["Client (Application) ID", clientId],
+                ["Client secret", clientSecret]
+            ].filter(pair => !pair[1]).map(pair => pair[0]);
+            if (missing.length) {
+                alert(`Please fill in: ${missing.join(", ")}.`);
+                return;
+            }
+
+            if (!fabricRelayAvailable()) {
+                alert(
+                    "Fabric cannot be reached when this page is opened straight from disk.\n\n" +
+                    "Microsoft's token endpoint refuses a client secret sent from a browser, so " +
+                    "the sign-in has to go through the local relay:\n  python dev_server.py\n\n" +
+                    "You can still type the workspace name or ID by hand for this run."
+                );
+                enableFabricManualEntry("no-relay");
+                return;
+            }
+
+            const originalLabel = btnTestFabric.innerHTML;
+            btnTestFabric.disabled = true;
+            btnTestFabric.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Signing in...';
+
+            try {
+                const token = await fetchFabricToken({
+                    tenantId: tenantId,
+                    clientId: clientId,
+                    clientSecret: clientSecret
+                });
+
+                btnTestFabric.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Loading workspaces...';
+                const workspaces = await fetchFabricWorkspaces(token.accessToken);
+
+                // "Personal" is a user's My workspace; nothing can be published
+                // into it by a service principal, so it is not offered.
+                const usable = workspaces.filter(ws => ws.type !== "Personal");
+
+                if (!usable.length) {
+                    alert(
+                        "Signed in to Microsoft Fabric, but this service principal can see no workspaces.\n\n" +
+                        "Add it to the target workspace as Admin, Member or Contributor " +
+                        "(Workspace → Manage access), and confirm the tenant setting " +
+                        "'Service principals can use Fabric APIs' is on."
+                    );
+                    enableFabricManualEntry("empty");
+                    return;
+                }
+
+                const select = document.getElementById("fabric-workspace-select");
+                select.innerHTML = '<option value="">Select a workspace...</option>';
+                usable
+                    .slice()
+                    .sort((a, b) => String(a.displayName || "").localeCompare(String(b.displayName || "")))
+                    .forEach(ws => {
+                        const option = document.createElement("option");
+                        option.value = ws.id;
+                        option.textContent = ws.displayName || ws.id;
+                        option.dataset.capacityId = ws.capacityId || "";
+                        select.appendChild(option);
+                    });
+
+                fabricConnection = {
+                    tenantId: tenantId,
+                    clientId: clientId,
+                    accessToken: token.accessToken,
+                    expiresAt: token.expiresAt,
+                    workspaces: usable
+                };
+
+                document.getElementById("fabric-workspace-container").style.display = "block";
+                document.getElementById("fabric-workspace-manual").style.display = "none";
+                document.getElementById("fabric-extra-fields").style.display = "block";
+                btnTestFabric.style.display = "none";
+
+                alert(`Connected to Microsoft Fabric. Loaded ${usable.length} workspace${usable.length === 1 ? "" : "s"}.`);
+            } catch (err) {
+                console.error(err);
+                if (err.name === "TypeError") {
+                    alert(
+                        "The browser could not reach the local relay.\n\n" +
+                        "Start the app with:  python dev_server.py"
+                    );
+                } else {
+                    alert("Fabric connection failed:\n\n" + err.message);
+                }
+            } finally {
+                btnTestFabric.disabled = false;
+                btnTestFabric.innerHTML = originalLabel;
+            }
+        });
+    }
+
+    // Picking a workspace fills the capacity in, so the audit report records the
+    // capacity the workspace is actually on rather than a hand-typed one.
+    const fabricWorkspaceSelect = document.getElementById("fabric-workspace-select");
+    if (fabricWorkspaceSelect) {
+        fabricWorkspaceSelect.addEventListener("change", () => {
+            const chosen = fabricWorkspaceSelect.options[fabricWorkspaceSelect.selectedIndex];
+            const capacityInput = document.getElementById("fabric-capacity");
+            if (!capacityInput || !chosen) return;
+            capacityInput.value = chosen.dataset ? (chosen.dataset.capacityId || "") : "";
+        });
+    }
+
+    // Reads whichever destination control is in play — the live picker when the
+    // tenant was listed, the typed field when it could not be.
+    function readFabricTarget() {
+        const select = document.getElementById("fabric-workspace-select");
+        const manualInput = document.getElementById("fabric-workspace");
+        const capacityInput = document.getElementById("fabric-capacity");
+        const prefixInput = document.getElementById("fabric-prefix");
+        const pickerBox = document.getElementById("fabric-workspace-container");
+        const usingPicker = !!(select && pickerBox && pickerBox.style.display !== "none");
+
+        let workspace = "";
+        let workspaceId = "";
+        if (usingPicker && select.value) {
+            workspace = select.options[select.selectedIndex].text;
+            workspaceId = select.value;
+        } else if (manualInput) {
+            workspace = manualInput.value.trim();
+        }
+
+        return {
+            workspace: workspace,
+            workspaceId: workspaceId,
+            capacity: capacityInput ? capacityInput.value.trim() : "",
+            prefix: prefixInput ? prefixInput.value.trim() : "",
+            usingPicker: usingPicker,
+            focusTarget: usingPicker ? select : manualInput
+        };
     }
 
     // ----------------------------------------------------------------------

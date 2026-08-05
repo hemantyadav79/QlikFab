@@ -180,26 +180,69 @@
                         <div id="fabric-target-container" style="display: none;">
                             <div class="form-section-title"><i class="fa-solid fa-bullseye"></i> Microsoft Fabric destination</div>
 
+                            <p class="form-hint">
+                                Sign in with a <b>Microsoft Entra ID service principal</b> (app registration) that has
+                                access to your Fabric tenant. Its three values come from the Azure portal &rarr;
+                                <b>Microsoft Entra ID &rarr; App registrations &rarr; your app</b>.
+                            </p>
+
                             <div class="form-group">
+                                <label>Tenant (Directory) ID</label>
+                                <input type="text" id="fabric-tenant-id" class="custom-input" placeholder="72f988bf-86f1-41af-91ab-2d7cd011db47" autocomplete="off">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Client (Application) ID</label>
+                                <input type="text" id="fabric-client-id" class="custom-input" placeholder="a1b2c3d4-e5f6-7890-abcd-ef1234567890" autocomplete="off">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Client secret</label>
+                                <input type="password" id="fabric-client-secret" class="custom-input" placeholder="Client secret VALUE (not the Secret ID)" autocomplete="off">
+                            </div>
+
+                            <p class="form-hint">
+                                Copy the secret's <b>Value</b> from <b>Certificates &amp; secrets</b> — it is shown once, at
+                                creation. Two things must also be true in the tenant, or the call returns an empty list:
+                                a Fabric admin has enabled <b>Admin portal &rarr; Tenant settings &rarr; Service principals
+                                can use Fabric APIs</b> for a group the app belongs to, and the app has been added to each
+                                workspace as <b>Admin</b>, <b>Member</b> or <b>Contributor</b>. Nothing is stored — the
+                                values are used for this session only.
+                            </p>
+
+                            <button id="btn-test-fabric" class="btn-secondary-block" style="margin-bottom: 15px;">
+                                Test Fabric Connection
+                            </button>
+
+                            <div id="fabric-workspace-container" class="form-group" style="display: none;">
+                                <label>Select the workspace to migrate into</label>
+                                <select id="fabric-workspace-select" class="custom-input">
+                                    <option value="">Select a workspace...</option>
+                                </select>
+                            </div>
+
+                            <div id="fabric-workspace-manual" class="form-group" style="display: none;">
                                 <label>Workspace name or ID</label>
                                 <input type="text" id="fabric-workspace" class="custom-input" placeholder="Finance Analytics  —  or  a1b2c3d4-e5f6-...">
                             </div>
 
-                            <div class="form-group">
-                                <label>Capacity ID (optional)</label>
-                                <input type="text" id="fabric-capacity" class="custom-input" placeholder="Leave blank to use the workspace's current capacity">
-                            </div>
+                            <div id="fabric-extra-fields" style="display: none;">
+                                <div class="form-group">
+                                    <label>Capacity ID (optional)</label>
+                                    <input type="text" id="fabric-capacity" class="custom-input" placeholder="Filled in from the selected workspace">
+                                </div>
 
-                            <div class="form-group">
-                                <label>Item name prefix (optional)</label>
-                                <input type="text" id="fabric-prefix" class="custom-input" placeholder="Defaults to the Qlik app name">
-                            </div>
+                                <div class="form-group">
+                                    <label>Item name prefix (optional)</label>
+                                    <input type="text" id="fabric-prefix" class="custom-input" placeholder="Defaults to the Qlik app name">
+                                </div>
 
-                            <p class="form-hint">
-                                The destination is recorded with the run and written into the audit report.
-                                This browser client generates the <b>.pbip</b> / <b>.pbit</b> for you to download —
-                                it does not publish to the workspace on your behalf.
-                            </p>
+                                <p class="form-hint">
+                                    The destination is recorded with the run and written into the audit report.
+                                    This browser client generates the <b>.pbip</b> / <b>.pbit</b> for you to download —
+                                    it does not publish to the workspace on your behalf.
+                                </p>
+                            </div>
                         </div>
 
                         <button id="btn-migrate-qlik" class="btn-secondary-block" style="display: none;">

@@ -62,6 +62,59 @@ final_demo_qlikfab/
 
 ---
 
+## 🔌 Connecting to Qlik Cloud and Microsoft Fabric
+
+The **With a Qlik connection** path talks to live tenants, and both of them refuse
+cross-origin browser calls. Start the app through the bundled relay rather than
+opening the file from disk:
+
+```bash
+python dev_server.py
+```
+
+Then browse to `http://localhost:8777`. Credentials are used for the call they
+belong to and are never logged or written to disk.
+
+### Qlik Cloud
+
+| Field | Where it comes from |
+| --- | --- |
+| Tenant URL | Your tenant origin, e.g. `https://your-tenant.us.qlikcloud.com` |
+| API key | Qlik Management Console → **API keys**. Paste the token only, with no `Bearer` prefix. |
+
+### Microsoft Fabric
+
+Fabric authenticates with a **Microsoft Entra ID service principal** (an app
+registration), using the client-credentials flow. Create one in the Azure portal
+under **Microsoft Entra ID → App registrations → New registration**, then collect:
+
+| Field | Where it comes from |
+| --- | --- |
+| Tenant (Directory) ID | App registration → **Overview** |
+| Client (Application) ID | App registration → **Overview** |
+| Client secret | App registration → **Certificates & secrets → New client secret**. Copy the **Value**, not the Secret ID — it is only shown once. |
+
+Two tenant-side prerequisites, or `Test Fabric Connection` succeeds but returns
+an empty workspace list:
+
+1. A Fabric administrator must enable **Admin portal → Tenant settings → Developer
+   settings → Service principals can use Fabric APIs**, for a security group the
+   app registration belongs to.
+2. The service principal must be added to each target workspace as **Admin**,
+   **Member** or **Contributor** (Workspace → **Manage access**).
+
+`Test Fabric Connection` exchanges the credentials for a token scoped to
+`https://api.fabric.microsoft.com/.default` and calls
+`GET https://api.fabric.microsoft.com/v1/workspaces`, so the picker lists the
+workspaces that principal can actually reach. Personal ("My workspace") entries
+are excluded, since a service principal cannot publish into them.
+
+The destination is recorded with the run and written into the audit report. This
+client generates the `.pbip` / `.pbit` for you to download — it does not publish
+to the workspace on your behalf.
+
+---
+
 ## 💻 Quickstart 2: Command-Line Interface (CLI)
 
 You can convert any `.qvf` file directly from Windows Terminal, PowerShell, or CMD using the scripts in the `cli/` directory:
