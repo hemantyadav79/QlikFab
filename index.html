@@ -81,19 +81,8 @@
                 </div>
 
                 <a href="#artifacts" class="nav-item" data-tab="tab-artifacts"><i class="fa-solid fa-box-open"></i> Artifacts</a>
-                <a href="#job-history" class="nav-item" data-tab="tab-history"><i class="fa-solid fa-clock-rotate-left"></i> Job history</a>
+                <a href="#job-history" class="nav-item" data-tab="tab-history"><i class="fa-solid fa-clock-rotate-left"></i> Migration history</a>
             </nav>
-
-
-            <div class="sidebar-footer">
-                <div class="autogen-badge">
-                    <div class="badge-icon"><i class="fa-solid fa-robot"></i></div>
-                    <div class="badge-content">
-                        <div class="badge-title">Microsoft AutoGen</div>
-                        <div class="badge-desc">4 AssistantAgents Active</div>
-                    </div>
-                </div>
-            </div>
         </aside>
 
         <!-- MAIN CONTENT AREA -->
@@ -107,7 +96,7 @@
                     </div>
                 </div>
                 <div class="header-actions">
-                    <div class="theme-toggle" role="group" aria-label="Colour theme">
+                    <div class="theme-toggle" role="group" aria-label="Theme switcher">
                         <span class="theme-toggle__thumb" aria-hidden="true"></span>
                         <button type="button" class="theme-toggle__option" data-theme-value="light"
                                 aria-pressed="true">
@@ -333,7 +322,7 @@
                 <!-- AUTOGEN LIVE CONSOLE MODAL / PANEL -->
                 <div id="autogen-console" class="autogen-console-card hidden">
                     <div class="console-header">
-                        <div class="console-title"><i class="fa-solid fa-robot"></i> Microsoft AutoGen 4-Phase Multi-Agent Execution</div>
+                        <div class="console-title"><i class="fa-solid fa-robot"></i> AI Agents 4-Phase Multi-Agent Execution</div>
                         <div class="console-status" id="console-status-badge"><span class="pulse-dot"></span> RUNNING</div>
                     </div>
                     <!-- 4 AUTONOMOUS AGENTS LIVE STREAMING DECK -->
@@ -488,8 +477,8 @@
             <section id="tab-agents" class="tab-pane">
                 <!-- AGENTS OVERVIEW (landing pane for the group) -->
                 <div id="sub-agents-overview" class="subtab-pane active">
-                    <h2>Microsoft AutoGen Agents</h2>
-                    <p class="tab-desc">Four autonomous <code>AssistantAgents</code> run the migration end to end. Open one to see its KPIs, output tables and live execution log.</p>
+                    <h2>AI Agents</h2>
+                    <p class="tab-desc">Four autonomous <code>AssistantAgents</code> run the migration end to end. Open one to see its KPIs and output tables.</p>
 
                     <div class="agent-card-grid">
                         <button type="button" class="agent-card" data-subtab="sub-agent-assess">
@@ -653,8 +642,8 @@
 
             <!-- TAB: JOB HISTORY -->
             <section id="tab-history" class="tab-pane">
-                <h2>Autonomous Migration Job History</h2>
-                <p class="tab-desc">Audit trail of all Microsoft AutoGen multi-agent execution runs</p>
+                <h2>Migration History</h2>
+                <p class="tab-desc">Audit trail of all AI Agents multi-agent execution runs</p>
                 
                 <div class="table-container">
                     <table class="custom-table">
