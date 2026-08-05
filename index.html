@@ -25,7 +25,7 @@
         })();
     </script>
 
-    <link rel="stylesheet" href="styles.css?v=20260805_multiselect_v1">
+    <link rel="stylesheet" href="styles.css?v=20260805_checklist_v1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -212,10 +212,12 @@
 
                         <div id="qlik-apps-container" class="form-group" style="display: none;">
                             <label>Select apps to migrate</label>
-                            <!-- Multi-select: each chosen app becomes its own PBIP project,
-                                 the same way a multi-file .qvf upload does. No placeholder
-                                 option — an unselectable prompt has no meaning in a list. -->
-                            <select id="qlik-app-select" class="custom-input custom-multiselect" multiple size="8"></select>
+                            <!-- A checkbox per app rather than a native multi-select: every
+                                 row's state is visible at once and picking several needs no
+                                 modifier key. Each ticked app becomes its own PBIP project,
+                                 the same way a multi-file .qvf upload does. Rows are
+                                 injected by script.js once the tenant has listed them. -->
+                            <div id="qlik-app-list" class="app-checklist" role="group" aria-label="Apps to migrate"></div>
                             <div class="select-toolbar">
                                 <span class="select-count" id="qlik-app-count">No apps selected</span>
                                 <span class="select-actions">
@@ -223,9 +225,37 @@
                                     <button type="button" class="btn-link" id="btn-clear-apps">Clear</button>
                                 </span>
                             </div>
-                            <p class="form-hint">
-                                Ctrl-click (&#8984;-click on Mac) to pick several, or Shift-click for a range.
-                            </p>
+                        </div>
+
+                        <!-- What the run produces. Downloading artifacts needs nothing but
+                             the Qlik connection, so the Fabric credentials below are asked
+                             for only when a Fabric destination is actually wanted. -->
+                        <div id="qlik-output-container" class="form-group" style="display: none;">
+                            <div class="form-section-title"><i class="fa-solid fa-flag-checkered"></i> What should the run produce?</div>
+                            <div class="dest-choice" role="radiogroup" aria-label="Run output">
+                                <label class="dest-option">
+                                    <input type="radio" name="qlik-output-mode" value="download" checked>
+                                    <span class="dest-option-inner">
+                                        <span class="dest-option-icon"><i class="fa-solid fa-box-open"></i></span>
+                                        <span class="dest-option-text">
+                                            <b>Download artifacts only</b>
+                                            <span>Build the .pbip / .pbit projects and take them from the Artifacts tab. No Microsoft Fabric account needed.</span>
+                                        </span>
+                                        <span class="dest-option-tick"><i class="fa-solid fa-circle-check"></i></span>
+                                    </span>
+                                </label>
+                                <label class="dest-option">
+                                    <input type="radio" name="qlik-output-mode" value="fabric">
+                                    <span class="dest-option-inner">
+                                        <span class="dest-option-icon"><i class="fa-solid fa-bullseye"></i></span>
+                                        <span class="dest-option-text">
+                                            <b>Record a Microsoft Fabric destination</b>
+                                            <span>Also name the workspace the projects are meant for. It is written into the audit report — the files are still downloaded, not published.</span>
+                                        </span>
+                                        <span class="dest-option-tick"><i class="fa-solid fa-circle-check"></i></span>
+                                    </span>
+                                </label>
+                            </div>
                         </div>
 
                         <!-- Destination in Microsoft Fabric. Recorded with the run and
@@ -674,6 +704,6 @@
         </main>
     </div>
 
-    <script src="script.js?v=20260805_multiselect_v1"></script>
+    <script src="script.js?v=20260805_checklist_v1"></script>
 </body>
 </html>

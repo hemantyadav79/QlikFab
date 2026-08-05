@@ -815,30 +815,111 @@ html[data-theme="dark"] .theme-toggle__thumb {
     color: var(--text-muted);
 }
 
-/* ---------- Multi-select app picker ---------- */
+/* ---------- App picker: one checkbox per app ---------- */
 
-/* A list, not a collapsed control: the padding that suits a single-line input
-   would sit around the whole box rather than each row, so it is moved onto the
-   options themselves. */
-.custom-multiselect {
+/* Scrolls past roughly six rows rather than growing without bound, so a tenant
+   with many apps cannot push the rest of the form off the card. */
+.app-checklist {
+    background-color: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
     padding: 6px;
-    height: auto;
+    max-height: 296px;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
-.custom-multiselect option {
-    padding: 9px 12px;
+.app-check {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid transparent;
     border-radius: var(--radius-sm);
-    color: var(--text-body);
-    font-size: 14px;
+    cursor: pointer;
+    transition: background-color var(--transition-fast),
+                border-color var(--transition-fast);
 }
 
-/* Chrome and Firefox both need the background forced with the colour repeated,
-   or a selected row keeps the UA's own blue when the list loses focus. */
-.custom-multiselect option:checked {
-    background: var(--accent) linear-gradient(0deg, var(--accent) 0%, var(--accent) 100%);
+.app-check:hover {
+    background-color: var(--bg-overlay);
+}
+
+/* The real input stays focusable for the keyboard but is not drawn; the square
+   below is what the user sees. */
+.app-check-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.app-check-box {
+    width: 19px;
+    height: 19px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1.5px solid var(--border-strong);
+    border-radius: 5px;
+    background: var(--bg-card);
     color: var(--text-on-accent);
+    font-size: 10px;
+    /* Only the border is animated. The fill and the checkmark are what tell the
+       user a row is ticked, and a state signal must not wait on a transition —
+       a half-applied fill would leave a dark tick on a dark square. */
+    transition: border-color var(--transition-fast);
+}
+
+.app-check-box i {
+    opacity: 0;
+    transform: scale(0.6);
+    transition: transform var(--transition-fast);
+}
+
+.app-check-input:checked + .app-check-box {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.app-check-input:checked + .app-check-box i {
+    opacity: 1;
+    transform: none;
+}
+
+.app-check-input:checked ~ .app-check-text .app-check-name {
+    color: var(--accent);
     font-weight: 600;
+}
+
+.app-check-input:focus-visible + .app-check-box {
+    box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.app-check-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.app-check-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-strong);
+}
+
+/* The app id is reference detail, not something to read at a glance. */
+.app-check-id {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .select-toolbar {
@@ -875,6 +956,109 @@ html[data-theme="dark"] .theme-toggle__thumb {
     margin-right: 8px;
     vertical-align: -1px;
     background: var(--border-strong);
+}
+
+/* ---------- Run output choice (download vs Fabric destination) ---------- */
+
+.dest-choice {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+}
+
+.dest-option {
+    display: block;
+    cursor: pointer;
+}
+
+.dest-option input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.dest-option-inner {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    height: 100%;
+    /* Right side is kept clear for the tick so a wrapping title never runs under it. */
+    padding: 16px 40px 16px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    transition: border-color var(--transition-fast),
+                background-color var(--transition-fast),
+                box-shadow var(--transition-fast);
+}
+
+.dest-option:hover .dest-option-inner {
+    border-color: var(--accent-ring);
+    background: var(--bg-card-hover);
+}
+
+.dest-option input:checked + .dest-option-inner {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
+.dest-option input:focus-visible + .dest-option-inner {
+    box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.dest-option-icon {
+    font-size: 16px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    margin-top: 1px;
+    transition: color var(--transition-fast);
+}
+
+.dest-option input:checked + .dest-option-inner .dest-option-icon {
+    color: var(--accent);
+}
+
+.dest-option-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.dest-option-text b {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-strong);
+    line-height: 1.35;
+}
+
+.dest-option-text span {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-sub);
+}
+
+/* Only drawn on the chosen card, where it confirms the choice without needing a
+   visible radio dial. */
+.dest-option-tick {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    font-size: 15px;
+    color: var(--accent);
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+}
+
+.dest-option input:checked + .dest-option-inner .dest-option-tick {
+    opacity: 1;
+}
+
+@media (max-width: 760px) {
+    .dest-choice { grid-template-columns: 1fr; }
 }
 
 /* --------------------------------------------------------------------------

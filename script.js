@@ -1863,7 +1863,9 @@ ${(appData.gaps && appData.gaps.length)
             b2.classList.remove("running-btn", "success-btn");
             b2.style.background = "";
             b2.style.color = "";
-            b2.innerHTML = "Migrate Selected Apps";
+            // Relabelled from the current output mode and tick count rather than a
+            // fixed string, so the reset cannot contradict what the form is set to.
+            syncQlikRunButton();
             // Stays hidden until Test Connection has actually listed the tenant's apps.
             b2.style.display = qlikConnection ? "block" : "none";
         }
@@ -1891,10 +1893,15 @@ ${(appData.gaps && appData.gaps.length)
         renderAgentDetailTabs();
 
         // C. Artifacts Tab Titles & LIVE DOWNLOAD BUTTONS
-        // Every uploaded .qvf produces its own project, so the artifact cards describe
+        // Every source app produces its own project, so the artifact cards describe
         // (and download) the whole batch rather than only the active file.
         const batchApps = getBatchApps();
         const isBatch = batchApps.length > 1;
+        // A batch can come from an upload or from apps picked in Qlik Cloud, so the
+        // cards name the source they actually have rather than assuming a file.
+        const batchSourceNoun = batchApps.every(a => a.source === "qlik-cloud")
+            ? "Qlik Cloud app"
+            : "source app";
 
         const artSubtitle = document.getElementById("artifact-dir-subtitle");
         if (artSubtitle) {
@@ -1906,7 +1913,7 @@ ${(appData.gaps && appData.gaps.length)
         const artPbitTitle = document.getElementById("artifact-pbit-title");
         if (artPbitTitle) {
             artPbitTitle.textContent = isBatch
-                ? `${batchApps.length} .pbit templates (one per uploaded .qvf)`
+                ? `${batchApps.length} .pbit templates (one per ${batchSourceNoun})`
                 : appData.pbitName;
         }
 
@@ -1920,7 +1927,7 @@ ${(appData.gaps && appData.gaps.length)
         const artPbipTitle = document.getElementById("artifact-pbip-title");
         if (artPbipTitle) {
             artPbipTitle.textContent = isBatch
-                ? `${batchApps.length} PBIP projects (one per uploaded .qvf)`
+                ? `${batchApps.length} PBIP projects (one per ${batchSourceNoun})`
                 : appData.pbipName;
         }
 
@@ -1943,7 +1950,7 @@ ${(appData.gaps && appData.gaps.length)
                 alert("IMPORTANT MICROSOFT FABRIC NOTE:\n" +
                       "You are downloading a Microsoft Fabric PBIP Project ZIP ARCHIVE (.zip file).\n\n" +
                       (isBatch
-                        ? `This archive holds ${batchApps.length} projects, one folder per uploaded .qvf.\n\n` +
+                        ? `This archive holds ${batchApps.length} projects, one folder per ${batchSourceNoun}.\n\n` +
                           "To open one in Power BI Desktop:\n" +
                           "1. Right-click the downloaded .zip file and select 'Extract All...' (unzip it first).\n" +
                           "2. Open the folder for the app you want and double-click the '.pbip' file inside.\n\n"
@@ -2323,11 +2330,11 @@ ${(appData.gaps && appData.gaps.length)
             return;
         }
         if (btnElem.id === "btn-migrate-qlik") {
-            const selectElem = document.getElementById("qlik-app-select");
             const chosenApps = selectedQlikApps();
             if (!chosenApps.length) {
-                alert("Please select at least one app to migrate.");
-                if (selectElem) selectElem.focus();
+                alert("Please tick at least one app to migrate.");
+                const firstBox = document.querySelector("#qlik-app-list .app-check-input");
+                if (firstBox) firstBox.focus();
                 return;
             }
             if (!qlikConnection) {
@@ -2335,20 +2342,27 @@ ${(appData.gaps && appData.gaps.length)
                 return;
             }
 
-            const destination = readFabricTarget();
-            if (!destination.workspace) {
-                alert(destination.usingPicker
-                    ? "Please select the Microsoft Fabric workspace to migrate into."
-                    : "Please connect to Microsoft Fabric, or enter the workspace name or ID to migrate into.");
-                if (destination.focusTarget) destination.focusTarget.focus();
-                return;
+            // A download-only run has no destination to validate; the workspace is
+            // required only when the user asked for one to be recorded.
+            let fabricTarget = null;
+            let namePrefix = "";
+            if (qlikOutputMode() === "fabric") {
+                const destination = readFabricTarget();
+                if (!destination.workspace) {
+                    alert(destination.usingPicker
+                        ? "Please select the Microsoft Fabric workspace to migrate into."
+                        : "Please connect to Microsoft Fabric, or enter the workspace name or ID to migrate into.");
+                    if (destination.focusTarget) destination.focusTarget.focus();
+                    return;
+                }
+                fabricTarget = {
+                    workspace: destination.workspace,
+                    workspaceId: destination.workspaceId,
+                    capacity: destination.capacity,
+                    prefix: destination.prefix
+                };
+                namePrefix = destination.prefix;
             }
-            const fabricTarget = {
-                workspace: destination.workspace,
-                workspaceId: destination.workspaceId,
-                capacity: destination.capacity,
-                prefix: destination.prefix
-            };
 
             // Read every selected app's real data model before anything is shown as
             // migrated. Each is read on its own, so one app the tenant will not hand
@@ -2363,14 +2377,17 @@ ${(appData.gaps && appData.gaps.length)
                     btnElem.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Reading metadata ${i + 1} of ${chosenApps.length}...`;
                     try {
                         const key = await loadQlikCloudApp(app.id, app.name);
-                        APP_REGISTRY[key].fabricTarget = fabricTarget;
-                        if (fabricTarget.prefix) {
+                        // Left unset on a download-only run, which is what the agent
+                        // panes and the audit report read to decide whether this run
+                        // had a destination at all.
+                        if (fabricTarget) APP_REGISTRY[key].fabricTarget = fabricTarget;
+                        if (namePrefix) {
                             // One prefix across several apps would name every project
                             // the same file, so with a batch it is used as an actual
                             // prefix. A single app keeps the existing naming.
                             const base = chosenApps.length > 1
-                                ? `${fabricTarget.prefix}_${APP_REGISTRY[key].safeName}`
-                                : fabricTarget.prefix;
+                                ? `${namePrefix}_${APP_REGISTRY[key].safeName}`
+                                : namePrefix;
                             APP_REGISTRY[key].pbitName = `${base}.pbit`;
                             APP_REGISTRY[key].pbipName = `${base}.pbip`;
                         }
@@ -2831,37 +2848,59 @@ ${(appData.gaps && appData.gaps.length)
         return key;
     }
 
-    // Every option the user has actually highlighted, in list order. Options with
-    // no value are ignored so a stray placeholder could never enter a run.
+    // ---------- App picker (one checkbox per app the tenant listed) ----------
+
+    function appCheckboxes() {
+        return Array.from(document.querySelectorAll("#qlik-app-list .app-check-input"));
+    }
+
+    // Every app the user has ticked, in the order the tenant listed them. The name
+    // rides along on the element so the run never has to re-derive it from the DOM.
     function selectedQlikApps() {
-        const select = document.getElementById("qlik-app-select");
-        if (!select) return [];
-        return Array.from(select.selectedOptions)
-            .filter(o => o.value)
-            .map(o => ({ id: o.value, name: o.textContent }));
+        return appCheckboxes()
+            .filter(cb => cb.checked)
+            .map(cb => ({ id: cb.value, name: cb.dataset.name }));
+    }
+
+    function renderQlikAppList(apps) {
+        const host = document.getElementById("qlik-app-list");
+        if (!host) return;
+        host.innerHTML = apps.map(app => {
+            const id = app.id || app.resourceId || "";
+            const name = app.name || "Unnamed App";
+            return `
+                <label class="app-check">
+                    <input type="checkbox" class="app-check-input" value="${escapeHtml(id)}" data-name="${escapeHtml(name)}">
+                    <span class="app-check-box"><i class="fa-solid fa-check"></i></span>
+                    <span class="app-check-text">
+                        <span class="app-check-name">${escapeHtml(name)}</span>
+                        <span class="app-check-id">${escapeHtml(id)}</span>
+                    </span>
+                </label>`;
+        }).join("");
+
+        host.querySelectorAll(".app-check-input").forEach(cb => {
+            cb.addEventListener("change", updateAppSelectionCount);
+        });
+        updateAppSelectionCount();
     }
 
     function updateAppSelectionCount() {
         const label = document.getElementById("qlik-app-count");
         if (!label) return;
-        const select = document.getElementById("qlik-app-select");
-        const total = select ? select.options.length : 0;
+        const total = appCheckboxes().length;
         const chosen = selectedQlikApps().length;
         label.textContent = chosen
             ? `${chosen} of ${total} app${total === 1 ? "" : "s"} selected`
             : `No apps selected — ${total} available`;
         label.classList.toggle("has-selection", chosen > 0);
+        syncQlikRunButton();
     }
-
-    const appSelect = document.getElementById("qlik-app-select");
-    if (appSelect) appSelect.addEventListener("change", updateAppSelectionCount);
 
     const btnSelectAllApps = document.getElementById("btn-select-all-apps");
     if (btnSelectAllApps) {
         btnSelectAllApps.addEventListener("click", () => {
-            const select = document.getElementById("qlik-app-select");
-            if (!select) return;
-            Array.from(select.options).forEach(o => { o.selected = !!o.value; });
+            appCheckboxes().forEach(cb => { cb.checked = true; });
             updateAppSelectionCount();
         });
     }
@@ -2869,12 +2908,43 @@ ${(appData.gaps && appData.gaps.length)
     const btnClearApps = document.getElementById("btn-clear-apps");
     if (btnClearApps) {
         btnClearApps.addEventListener("click", () => {
-            const select = document.getElementById("qlik-app-select");
-            if (!select) return;
-            select.selectedIndex = -1;
+            appCheckboxes().forEach(cb => { cb.checked = false; });
             updateAppSelectionCount();
         });
     }
+
+    // ---------- What the run produces ----------
+
+    // "download" needs nothing beyond the Qlik connection; "fabric" additionally
+    // records where the projects are meant to land.
+    function qlikOutputMode() {
+        const picked = document.querySelector('input[name="qlik-output-mode"]:checked');
+        return picked ? picked.value : "download";
+    }
+
+    // The Fabric credentials are only asked for when a Fabric destination is
+    // actually wanted, so the download path never presents fields it will not use.
+    function applyQlikOutputMode() {
+        const wantsFabric = qlikOutputMode() === "fabric";
+        const fabricBox = document.getElementById("fabric-target-container");
+        if (fabricBox) fabricBox.style.display = wantsFabric ? "block" : "none";
+        syncQlikRunButton();
+    }
+
+    // The button says what it will actually do, which differs between the two modes.
+    function syncQlikRunButton() {
+        const btn = document.getElementById("btn-migrate-qlik");
+        if (!btn || btn.disabled || btn.classList.contains("success-btn")) return;
+        const count = selectedQlikApps().length;
+        const suffix = count ? ` (${count})` : "";
+        btn.innerHTML = qlikOutputMode() === "fabric"
+            ? `Migrate to Microsoft Fabric${suffix}`
+            : `Generate &amp; download artifacts${suffix}`;
+    }
+
+    document.querySelectorAll('input[name="qlik-output-mode"]').forEach(radio => {
+        radio.addEventListener("change", applyQlikOutputMode);
+    });
 
     const btnTestConnection = document.getElementById("btn-test-connection");
     if (btnTestConnection) {
@@ -2924,21 +2994,16 @@ ${(appData.gaps && appData.gaps.length)
                 if (apps.length === 0) {
                     alert("Connected successfully, but no apps were found.");
                 } else {
-                    const select = document.getElementById("qlik-app-select");
-                    select.innerHTML = "";
-                    apps.forEach(app => {
-                        const option = document.createElement("option");
-                        option.value = app.id || app.resourceId;
-                        option.textContent = app.name || "Unnamed App";
-                        select.appendChild(option);
-                    });
-                    updateAppSelectionCount();
+                    renderQlikAppList(apps);
 
                     qlikConnection = { baseUrl: cleanUrl, apiKey: apiKey };
 
                     document.getElementById("qlik-apps-container").style.display = "block";
-                    document.getElementById("fabric-target-container").style.display = "block";
+                    document.getElementById("qlik-output-container").style.display = "block";
                     document.getElementById("btn-migrate-qlik").style.display = "block";
+                    // Honours whichever output the radio is on; the Fabric fields stay
+                    // hidden while the run is only meant to produce downloads.
+                    applyQlikOutputMode();
                     btnTestConnection.style.display = "none";
                     alert(`Connection Successful! Loaded ${apps.length} apps.`);
                 }
