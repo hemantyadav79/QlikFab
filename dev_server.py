@@ -90,11 +90,11 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
 
         try:
             with urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT_SECONDS) as response:
-                self.relay(response.status, response.headers.get("Content-Type"), response.read())
+                self.relay(response.status, response.headers.get("Content-Type"), response.read(), upstream=True)
         except urllib.error.HTTPError as err:
             # Pass the service's own status and error body straight through, so the
             # UI reports what the tenant said rather than what the proxy assumed.
-            self.relay(err.code, err.headers.get("Content-Type"), err.read())
+            self.relay(err.code, err.headers.get("Content-Type"), err.read(), upstream=True)
         except urllib.error.URLError as err:
             self.send_json(502, {"proxyError": "Could not reach the tenant: %s" % err.reason})
         except Exception as err:  # noqa: BLE001 - the dev server must not die on one bad call
@@ -186,11 +186,17 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
             )
         return None
 
-    def relay(self, status, content_type, body):
+    def relay(self, status, content_type, body, upstream=False):
         self.send_response(status)
         self.send_header("Content-Type", content_type or "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # Marks a status that came from the upstream service rather than from this
+        # relay. A 404 is otherwise ambiguous: it reads the same whether the tenant
+        # has no such resource or whether a plain static server has no proxy route,
+        # and the page must not report one as the other.
+        if upstream:
+            self.send_header("X-Relay-Source", "upstream")
         self.end_headers()
         self.wfile.write(body)
 

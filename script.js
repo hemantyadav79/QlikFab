@@ -2761,8 +2761,13 @@ ${(appData.gaps && appData.gaps.length)
             return `The local Qlik relay could not complete the call.\n\n${proxyError}`;
         }
 
-        // Served by the plain static server, which has no /qlik-proxy route.
-        if (usedProxy && response.status === 404 && !/qlik/i.test(detail)) {
+        // A 404 is ambiguous by status alone — it reads the same whether the tenant
+        // has no such resource or whether a plain static server has no /qlik-proxy
+        // route. The relay stamps everything it forwards, so the two are told apart
+        // by that header instead of by guessing from the body: a relayed 404 is the
+        // tenant's own answer and must be reported as such.
+        const fromUpstream = response.headers.get("X-Relay-Source") === "upstream";
+        if (usedProxy && !fromUpstream && response.status === 404) {
             return [
                 "The local Qlik relay is not running.",
                 "",
@@ -2775,6 +2780,17 @@ ${(appData.gaps && appData.gaps.length)
 
         const lines = [`${response.status}${response.statusText ? " " + response.statusText : ""} from ${baseUrl}`];
         lines.push("", detail ? "Tenant said:\n" + detail : "The tenant returned no error details (empty body).");
+
+        if (response.status === 404 && fromUpstream) {
+            lines.push(
+                "",
+                "The relay is running — this 404 is the tenant's own answer, forwarded unchanged.",
+                "",
+                "That endpoint describes an app's loaded data model, so the tenant reports no such",
+                "resource when the app has never been reloaded, has been deleted, or is not visible",
+                "to the key's owner. Which of those it is can only be settled in Qlik itself."
+            );
+        }
 
         if (response.status === 401 || response.status === 403) {
             lines.push(
@@ -2866,7 +2882,11 @@ ${(appData.gaps && appData.gaps.length)
         const host = document.getElementById("qlik-app-list");
         if (!host) return;
         host.innerHTML = apps.map(app => {
-            const id = app.id || app.resourceId || "";
+            // /api/v1/items returns two ids per app and only one of them addresses
+            // the app: `resourceId` is the app id (a GUID) that /api/v1/apps/{id}/...
+            // expects, while `id` is the item id used by catalog and search. Taking
+            // `id` first answers 404 on every app, so resourceId must win.
+            const id = app.resourceId || app.id || "";
             const name = app.name || "Unnamed App";
             return `
                 <label class="app-check">
