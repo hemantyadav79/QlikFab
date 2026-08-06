@@ -619,8 +619,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 <h3>Build output per app</h3>
                 <p class="agent-section-note">
                     ${built
-                        ? "Produced by the last completed run. Downloads live on the Artifacts tab."
-                        : "Planned output for the current upload. Nothing is written until a migration run completes."}
+                        ? "Produced by the last completed run."
+                        : "Planned output for the selected Qlik Cloud apps. Nothing is written until a migration run completes."}
                 </p>
                 <table class="custom-table">
                     <thead>
@@ -628,25 +628,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     </thead>
                     <tbody>${rows}</tbody>
                 </table>
-                <div class="action-bar">
-                    <button class="btn-primary-block" id="btn-agent-goto-artifacts" style="width: auto; padding: 12px 28px;">
-                        <i class="fa-solid fa-box-open"></i> Open Artifacts tab
-                    </button>
-                </div>
             </div>`;
-
-        const gotoBtn = document.getElementById("btn-agent-goto-artifacts");
-        if (gotoBtn) gotoBtn.addEventListener("click", () => switchTab("tab-artifacts"));
-    }
-
-    // The download cards describe files a run produced, so they stay hidden until
-    // a run has actually produced them.
-    function updateArtifactsAvailability() {
-        const grid = document.getElementById("artifacts-grid");
-        const empty = document.getElementById("artifacts-empty-state");
-        const built = !!lastRunSummary;
-        if (grid) grid.classList.toggle("hidden", !built);
-        if (empty) empty.classList.toggle("hidden", built);
     }
 
     // Writes the shared status chrome (sidebar pill, pane badge, run-state line)
@@ -680,7 +662,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderAgentDetailTabs() {
         const apps = getBatchApps();
-        updateArtifactsAvailability();
         renderAssessAgentTab(apps);
         renderParseAgentTab(apps);
         renderMapAgentTab(apps);
@@ -815,64 +796,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     applyView(currentView);
-
-    // ----------------------------------------------------------------------
-    // 2b. SOURCE CHOOSER
-    // The Run migration tab opens on a choice of source; only the chosen path is
-    // rendered afterwards, so an upload and a live connection are never both
-    // half-configured at the same time.
-    // ----------------------------------------------------------------------
-    const MODE_META = {
-        file: {
-            name: "Upload files — no Qlik connection",
-            caption: "Upload any .QVF file or .ZIP archive. The files are read in your browser and never sent anywhere."
-        },
-        qlik: {
-            name: "Live Qlik Cloud connection",
-            caption: "Connect to your tenant, pick an app, then set the Microsoft Fabric destination for the run."
-        }
-    };
-
-    let activeMode = null;
-
-    function applyMode(mode) {
-        activeMode = mode;
-        const chooser = document.getElementById("mode-chooser");
-        const bar = document.getElementById("mode-bar");
-        const grid = document.getElementById("migration-grid");
-        const caption = document.getElementById("mode-footer-caption");
-        const barName = document.getElementById("mode-bar-name");
-        const filePane = document.getElementById("mode-pane-file");
-        const qlikPane = document.getElementById("mode-pane-qlik");
-
-        const chosen = !!mode;
-        if (chooser) chooser.classList.toggle("hidden", chosen);
-        if (bar) bar.classList.toggle("hidden", !chosen);
-        if (grid) grid.classList.toggle("hidden", !chosen);
-        if (caption) caption.classList.toggle("hidden", !chosen);
-        if (filePane) filePane.classList.toggle("hidden", mode !== "file");
-        if (qlikPane) qlikPane.classList.toggle("hidden", mode !== "qlik");
-        if (chosen) {
-            if (barName) barName.textContent = MODE_META[mode].name;
-            if (caption) caption.textContent = MODE_META[mode].caption;
-        }
-    }
-
-    document.querySelectorAll(".mode-card").forEach(card => {
-        card.addEventListener("click", () => applyMode(card.getAttribute("data-mode")));
-    });
-
-    const btnChangeMode = document.getElementById("btn-change-mode");
-    if (btnChangeMode) {
-        btnChangeMode.addEventListener("click", () => {
-            // Switching source drops whatever the previous source had loaded, so the
-            // other path can never run against it.
-            refreshAllTabsForActiveQvf(null);
-            const consoleCard = document.getElementById("autogen-console");
-            if (consoleCard) consoleCard.classList.add("hidden");
-            applyMode(null);
-        });
-    }
 
     // ----------------------------------------------------------------------
     // 3. REAL POWER BI FILE GENERATORS & DOWNLOADERS (.PBIT, .PBIP, .MD)
@@ -1888,152 +1811,27 @@ ${(appData.gaps && appData.gaps.length)
             if (detailEmpty) detailEmpty.classList.remove("hidden");
         });
 
-        // Reset Start Migration buttons so they only appear when a file is loaded, and never stay stuck on green "Migration Completed"
-        const b1 = document.getElementById("btn-start-migration");
-        if (b1) {
-            b1.disabled = false;
-            b1.classList.remove("running-btn", "success-btn");
-            b1.style.background = "";
-            b1.style.color = "";
-            b1.innerHTML = "Start migration";
-            b1.style.display = "block";
-        }
-        const b2 = document.getElementById("btn-migrate-qlik");
-        if (b2) {
-            b2.disabled = false;
-            b2.classList.remove("running-btn", "success-btn");
-            b2.style.background = "";
-            b2.style.color = "";
-            // Relabelled from the current output mode and tick count rather than a
-            // fixed string, so the reset cannot contradict what the form is set to.
+        // Reset the run button so it never stays stuck on green "Migration Completed".
+        const runBtn = document.getElementById("btn-migrate-qlik");
+        if (runBtn) {
+            runBtn.disabled = false;
+            runBtn.classList.remove("running-btn", "success-btn");
+            runBtn.style.background = "";
+            runBtn.style.color = "";
+            // Relabelled from the current tick count rather than a fixed string, so
+            // the reset cannot contradict what the form is set to.
             syncQlikRunButton();
-            // Stays hidden until Test Connection has actually listed the tenant's apps.
-            b2.style.display = qlikConnection ? "block" : "none";
         }
+        clearConnStatus("run-status");
 
-        const dzName = document.getElementById("dropzone-name");
-        const dzSize = document.getElementById("dropzone-size");
         if (!appData) {
-            if (dzName) dzName.textContent = "No file uploaded (Upload from folder or choose below)";
-            if (dzSize) dzSize.textContent = "0 KB";
             renderAgentDetailTabs();
             return;
-        }
-        // A live Qlik Cloud app was never uploaded, so the upload box must not
-        // start claiming it holds a file.
-        if (appData.source === "qlik-cloud") {
-            if (dzName) dzName.textContent = "No file uploaded — active app is live from Qlik Cloud";
-            if (dzSize) dzSize.textContent = "0 KB";
-        } else {
-            if (dzName) dzName.textContent = appData.filename;
-            if (dzSize) dzSize.textContent = appData.size;
         }
 
         // B. Agent panes — volumetrics, PII findings and the DAX queue all render
         // from the same registry, so there is no separate scorecard to keep in step.
         renderAgentDetailTabs();
-
-        // C. Artifacts Tab Titles & LIVE DOWNLOAD BUTTONS
-        // Every source app produces its own project, so the artifact cards describe
-        // (and download) the whole batch rather than only the active file.
-        const batchApps = getBatchApps();
-        const isBatch = batchApps.length > 1;
-        // A batch can come from an upload or from apps picked in Qlik Cloud, so the
-        // cards name the source they actually have rather than assuming a file.
-        const batchSourceNoun = batchApps.every(a => a.source === "qlik-cloud")
-            ? "Qlik Cloud app"
-            : "source app";
-
-        const artSubtitle = document.getElementById("artifact-dir-subtitle");
-        if (artSubtitle) {
-            artSubtitle.textContent = isBatch
-                ? batchApps.map(a => a.projectDir).join("  ")
-                : appData.projectDir;
-        }
-
-        const artPbitTitle = document.getElementById("artifact-pbit-title");
-        if (artPbitTitle) {
-            artPbitTitle.textContent = isBatch
-                ? `${batchApps.length} .pbit templates (one per ${batchSourceNoun})`
-                : appData.pbitName;
-        }
-
-        const artPbitMeta = document.getElementById("artifact-pbit-meta");
-        if (artPbitMeta) {
-            artPbitMeta.textContent = isBatch
-                ? `${batchApps.map(a => a.pbitName).join(", ")} • bundled as one .zip`
-                : `Size: ${appData.pbitSize} • Standalone Template`;
-        }
-
-        const artPbipTitle = document.getElementById("artifact-pbip-title");
-        if (artPbipTitle) {
-            artPbipTitle.textContent = isBatch
-                ? `${batchApps.length} PBIP projects (one per ${batchSourceNoun})`
-                : appData.pbipName;
-        }
-
-        const pbitBtn = document.getElementById("artifact-pbit-btn");
-        if (pbitBtn) {
-            pbitBtn.onclick = (e) => {
-                e.preventDefault();
-                if (isBatch) {
-                    downloadPbitBatch(batchApps);
-                } else {
-                    generateAndDownloadPBIT(appData);
-                }
-            };
-        }
-
-        const pbipBtn = document.getElementById("artifact-pbip-btn");
-        if (pbipBtn) {
-            pbipBtn.onclick = (e) => {
-                e.preventDefault();
-                alert("IMPORTANT MICROSOFT FABRIC NOTE:\n" +
-                      "You are downloading a Microsoft Fabric PBIP Project ZIP ARCHIVE (.zip file).\n\n" +
-                      (isBatch
-                        ? `This archive holds ${batchApps.length} projects, one folder per ${batchSourceNoun}.\n\n` +
-                          "To open one in Power BI Desktop:\n" +
-                          "1. Right-click the downloaded .zip file and select 'Extract All...' (unzip it first).\n" +
-                          "2. Open the folder for the app you want and double-click the '.pbip' file inside.\n\n"
-                        : "To open this project in Power BI Desktop:\n" +
-                          "1. Right-click the downloaded .zip file and select 'Extract All...' (unzip it first).\n" +
-                          "2. Open the extracted folder and double-click the small '.pbip' text file inside.\n\n") +
-                      "★ FOR 1-CLICK INSTANT OPENING WITHOUT UNZIPPING:\n" +
-                      "Click 'Download .PBIT (Instant Open)' instead! .PBIT files open directly on single click without unzipping!");
-                // A file the engine migrated has a real bundle on the server — the
-                // one Power BI will actually open. Only apps the engine never
-                // touched fall back to the browser-assembled project.
-                const fromEngine = batchApps.filter(a => a.engineRunId);
-                if (fromEngine.length) {
-                    fromEngine.forEach(a => {
-                        const link = document.createElement("a");
-                        link.href = `/api/runs/${a.engineRunId}/download`;
-                        link.download = a.artifactName || `${a.name}_PBIP.zip`;
-                        document.body.appendChild(link);
-                        link.click();
-                        link.remove();
-                    });
-                    return;
-                }
-                if (isBatch) {
-                    downloadPbipBatch(batchApps);
-                } else {
-                    generateAndDownloadPBIP(appData);
-                }
-            };
-        }
-
-        const auditBtn = document.getElementById("artifact-audit-btn");
-        if (auditBtn) {
-            auditBtn.onclick = (e) => {
-                e.preventDefault();
-                if (isBatch) {
-                    downloadTextFile("MIGRATION_AUDIT_REPORT.md", buildBatchAuditReport(batchApps));
-                } else {
-                    generateAndDownloadAuditReport(appData);
-                }
-            };
-        }
 
         // D. Update Job History Tab dynamically
         renderJobHistory();
@@ -2464,10 +2262,104 @@ ${(appData.gaps && appData.gaps.length)
     // Must be looked up by id: the Qlik Cloud card now holds two .btn-secondary-block
     // buttons, and the first one is "Test Connection".
     const btnMigrateQlik = document.getElementById("btn-migrate-qlik");
-    const consoleCard = document.getElementById("autogen-console");
     const consoleBody = document.getElementById("console-logs-body");
     const consoleBadge = document.getElementById("console-status-badge");
     const metricsRow = document.getElementById("console-metrics-row");
+
+    // ----------------------------------------------------------------------
+    // 7a. LOGS TAB
+    // One stream for the whole run. The four phases each used to own a small box
+    // on the Run migration tab, so a run could only be read four short
+    // scrollbacks at a time and never in the order it happened.
+    // ----------------------------------------------------------------------
+    const LOG_PHASE_LABEL = {
+        assess: "Assess",
+        parse: "Parse",
+        map: "Map",
+        gen: "Report"
+    };
+
+    let activeLogPhase = "all";
+
+    // Appends one line to the unified stream. The phase rides on the row so the
+    // chips can filter without the text being re-rendered.
+    function appendUnifiedLog(phaseId, timeSec, msgHtml) {
+        if (!consoleBody) return;
+        const row = document.createElement("div");
+        row.className = "log-line";
+        row.dataset.phase = phaseId;
+        row.innerHTML =
+            `<span class="log-time">[+${timeSec}s]</span>` +
+            `<span class="log-phase phase-${phaseId}">${LOG_PHASE_LABEL[phaseId] || phaseId}</span>` +
+            `<span class="log-text">${msgHtml}</span>`;
+        if (activeLogPhase !== "all" && activeLogPhase !== phaseId) {
+            row.classList.add("filtered-out");
+        }
+        consoleBody.appendChild(row);
+        consoleBody.scrollTop = consoleBody.scrollHeight;
+        setLogsEmptyState();
+    }
+
+    // Three states to keep straight: nothing has run, something ran but this
+    // filter matches none of it, and there are lines to show.
+    function setLogsEmptyState() {
+        const emptyState = document.getElementById("logs-empty-state");
+        const filterEmpty = document.getElementById("logs-filter-empty");
+        const total = consoleBody ? consoleBody.children.length : 0;
+        const shown = consoleBody
+            ? Array.from(consoleBody.children).filter(r => !r.classList.contains("filtered-out")).length
+            : 0;
+
+        if (emptyState) emptyState.classList.toggle("hidden", total > 0);
+        if (consoleBody) consoleBody.classList.toggle("hidden", total === 0 || shown === 0);
+        if (filterEmpty) filterEmpty.classList.toggle("hidden", total === 0 || shown > 0);
+    }
+
+    function applyLogFilter(phase) {
+        activeLogPhase = phase;
+        document.querySelectorAll(".log-filter").forEach(chip => {
+            chip.classList.toggle("active", chip.dataset.phase === phase);
+        });
+        if (consoleBody) {
+            Array.from(consoleBody.children).forEach(row => {
+                row.classList.toggle("filtered-out", phase !== "all" && row.dataset.phase !== phase);
+            });
+        }
+        setLogsEmptyState();
+    }
+
+    document.querySelectorAll(".log-filter").forEach(chip => {
+        chip.addEventListener("click", () => applyLogFilter(chip.dataset.phase));
+    });
+
+    // Copies the run as plain text — the whole stream, not just what the current
+    // filter shows, so a pasted log is never quietly partial.
+    const btnCopyLogs = document.getElementById("btn-copy-logs");
+    if (btnCopyLogs) {
+        btnCopyLogs.addEventListener("click", async () => {
+            if (!consoleBody || !consoleBody.children.length) return;
+            const text = Array.from(consoleBody.children).map(row => {
+                const time = row.querySelector(".log-time");
+                const phase = row.querySelector(".log-phase");
+                const body = row.querySelector(".log-text");
+                return [
+                    time ? time.textContent : "",
+                    phase ? `[${phase.textContent}]` : "",
+                    body ? body.textContent : ""
+                ].filter(Boolean).join(" ");
+            }).join("\n");
+            try {
+                await navigator.clipboard.writeText(text);
+                btnCopyLogs.textContent = "Copied";
+            } catch (err) {
+                console.error(err);
+                btnCopyLogs.textContent = "Copy failed";
+            }
+            setTimeout(() => { btnCopyLogs.textContent = "Copy"; }, 1600);
+        });
+    }
+
+    setLogsEmptyState();
 
     // ----------------------------------------------------------------------
     // 7b. REAL ENGINE RUNS
@@ -2713,64 +2605,70 @@ ${(appData.gaps && appData.gaps.length)
         btnElem.classList.remove("running-btn");
         if (completed.length) {
             btnElem.classList.add("success-btn");
-            btnElem.innerHTML = `<i class="fa-solid fa-circle-check"></i> Engine finished — View Artifacts -&gt;`;
+            btnElem.innerHTML = `<i class="fa-solid fa-circle-check"></i> Engine finished — View migration history -&gt;`;
         } else {
             btnElem.innerHTML = originalText;
         }
 
         if (failed.length) {
-            alert([
-                `${failed.length} of ${engineApps.length} file(s) did not migrate:`,
+            setConnStatus("run-status", "error", [
+                `${failed.length} of ${engineApps.length} app(s) did not migrate:`,
                 "",
                 failed.map(f => `• ${f.name}\n  ${f.message}`).join("\n\n"),
-                completed.length ? `\n${completed.length} file(s) did complete and are in Artifacts.` : ""
+                completed.length ? `\n${completed.length} app(s) did complete — see Migration history.` : ""
             ].join("\n"));
         }
     }
 
     async function executeMigrationFlow(btnElem) {
         if (!btnElem) return;
-        // After a run the button turns into "View Artifacts"; its click listener is
-        // still attached, so without this guard a second click would silently start
-        // the whole migration over again.
+        // After a run the button reports completion; its click listener is still
+        // attached, so without this guard a second click would silently start the
+        // whole migration over again.
         if (btnElem.classList.contains("success-btn")) {
-            switchTab("tab-artifacts");
+            switchTab("tab-history");
             return;
         }
         if (btnElem.id === "btn-migrate-qlik") {
+            // The two sides are configured independently, so the run is the first
+            // point at which both have to be there. Everything missing is named at
+            // once rather than one alert at a time.
+            clearConnStatus("run-status");
             const chosenApps = selectedQlikApps();
-            if (!chosenApps.length) {
-                alert("Please tick at least one app to migrate.");
-                const firstBox = document.querySelector("#qlik-app-list .app-check-input");
-                if (firstBox) firstBox.focus();
-                return;
-            }
+            const destination = readFabricTarget();
+            const blockers = [];
             if (!qlikConnection) {
-                alert("The Qlik Cloud connection was lost. Please run Test Connection again.");
-                return;
+                blockers.push("Connect to Qlik Cloud — run Test Connection on the left.");
+            } else if (!chosenApps.length) {
+                blockers.push("Tick at least one Qlik app to migrate.");
             }
-
-            // A download-only run has no destination to validate; the workspace is
-            // required only when the user asked for one to be recorded.
-            let fabricTarget = null;
-            let namePrefix = "";
-            if (qlikOutputMode() === "fabric") {
-                const destination = readFabricTarget();
-                if (!destination.workspace) {
-                    alert(destination.usingPicker
-                        ? "Please select the Microsoft Fabric workspace to migrate into."
-                        : "Please connect to Microsoft Fabric, or enter the workspace name or ID to migrate into.");
-                    if (destination.focusTarget) destination.focusTarget.focus();
+            if (!destination.workspace) {
+                blockers.push(destination.usingPicker
+                    ? "Select the Microsoft Fabric workspace to migrate into."
+                    : "Connect to Microsoft Fabric, or type the workspace name or ID on the right.");
+            }
+            if (blockers.length) {
+                setConnStatus("run-status", "error",
+                    `Cannot start the run yet:\n${blockers.map(b => `• ${b}`).join("\n")}`);
+                // The app picker is collapsed, so pointing at a row inside it would
+                // focus something the user cannot see — open it instead.
+                if (qlikConnection && !chosenApps.length) {
+                    setAppDropdownOpen(true);
                     return;
                 }
-                fabricTarget = {
-                    workspace: destination.workspace,
-                    workspaceId: destination.workspaceId,
-                    capacity: destination.capacity,
-                    prefix: destination.prefix
-                };
-                namePrefix = destination.prefix;
+                const focusTarget = qlikConnection
+                    ? destination.focusTarget
+                    : document.getElementById("qlik-tenant-url");
+                if (focusTarget) focusTarget.focus();
+                return;
             }
+            const fabricTarget = {
+                workspace: destination.workspace,
+                workspaceId: destination.workspaceId,
+                capacity: destination.capacity,
+                prefix: destination.prefix
+            };
+            const namePrefix = destination.prefix;
 
             // Read every selected app's real data model before anything is shown as
             // migrated. Each is read on its own, so one app the tenant will not hand
@@ -2837,7 +2735,7 @@ ${(appData.gaps && appData.gaps.length)
             }
 
             if (!loadedKeys.length) {
-                alert([
+                setConnStatus("run-status", "error", [
                     `None of the ${chosenApps.length} selected app(s) could be read from Qlik Cloud, so nothing was migrated.`,
                     "",
                     failures.map(f => `• ${f.name}\n  ${f.message}`).join("\n\n")
@@ -2845,10 +2743,13 @@ ${(appData.gaps && appData.gaps.length)
                 return;
             }
 
+            refreshAllTabsForActiveQvf(APP_REGISTRY[loadedKeys[0]], loadedKeys);
+
             // A partial batch still runs, but the user is told exactly what is not in
-            // it — the run must never quietly stand in for apps it never read.
+            // it — the run must never quietly stand in for apps it never read. Set
+            // after the refresh, which resets the run panel.
             if (failures.length) {
-                alert([
+                setConnStatus("run-status", "error", [
                     `${failures.length} of ${chosenApps.length} selected app(s) could not be read and are NOT part of this run:`,
                     "",
                     failures.map(f => `• ${f.name}\n  ${f.message}`).join("\n\n"),
@@ -2856,13 +2757,6 @@ ${(appData.gaps && appData.gaps.length)
                     `Continuing with the ${loadedKeys.length} app(s) that were read.`
                 ].join("\n"));
             }
-
-            refreshAllTabsForActiveQvf(APP_REGISTRY[loadedKeys[0]], loadedKeys);
-        } else if (!currentActiveQvf) {
-            alert("Please browse and upload a .QVF file first to start migration!");
-            const fileInput = document.getElementById("qvf-file-input");
-            if (fileInput) fileInput.click();
-            return;
         }
 
         // 1. Immediate interactive button press & running feedback
@@ -2873,22 +2767,20 @@ ${(appData.gaps && appData.gaps.length)
         btnElem.classList.add("running-btn");
         btnElem.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Running migration engine…`;
 
-        if (consoleCard) {
-            consoleCard.classList.remove("hidden");
-            // Smoothly scroll down so user immediately sees the live execution console
-            setTimeout(() => {
-                consoleCard.scrollIntoView({ behavior: "smooth", block: "center" });
-            }, 100);
-        }
+        // The stream belongs to one run, so a new run replaces it rather than
+        // appending to output that describes different apps.
+        if (consoleBody) consoleBody.innerHTML = "";
+        applyLogFilter("all");
         if (metricsRow) metricsRow.classList.add("hidden");
         if (consoleBadge) {
             consoleBadge.className = "console-status running";
             consoleBadge.innerHTML = `<span class="pulse-dot"></span> RUNNING`;
         }
-        if (consoleBody) consoleBody.innerHTML = "";
+        // The output is a tab of its own now, so the run opens it rather than
+        // unfolding a panel under the form.
+        switchTab("tab-logs");
+
         ["assess", "parse", "map", "gen"].forEach(id => {
-            const box = document.getElementById(`logs-agent-${id}`);
-            if (box) box.innerHTML = "";
             // The per-agent tab mirrors the same stream, so clear it too and drop
             // its "nothing has run" placeholder.
             const detailBox = document.getElementById(`logs-detail-${id}`);
@@ -2899,18 +2791,17 @@ ${(appData.gaps && appData.gaps.length)
             setAgentRunState(id, "Run in progress…");
         });
 
-        // Helper to append a log line to an agent's console box and to the same
-        // agent's detail tab.
+        // Every line goes to two places: the unified Logs tab, and the agent's own
+        // detail pane under Agents.
         const appendLogToAgent = (id, timeSec, msg) => {
-            [`logs-agent-${id}`, `logs-detail-${id}`].forEach(boxId => {
-                const box = document.getElementById(boxId);
-                if (!box) return;
-                const row = document.createElement("div");
-                row.className = "log-line";
-                row.innerHTML = `<span class="log-time">[+${timeSec}s]</span> ${msg}`;
-                box.appendChild(row);
-                box.scrollTop = box.scrollHeight;
-            });
+            appendUnifiedLog(id, timeSec, msg);
+            const box = document.getElementById(`logs-detail-${id}`);
+            if (!box) return;
+            const row = document.createElement("div");
+            row.className = "log-line";
+            row.innerHTML = `<span class="log-time">[+${timeSec}s]</span> ${msg}`;
+            box.appendChild(row);
+            box.scrollTop = box.scrollHeight;
         };
 
         const setAgentBadge = (id, label, styleClass) => setAgentStatus(id, label, styleClass);
@@ -2978,7 +2869,7 @@ ${(appData.gaps && appData.gaps.length)
             setTimeout(() => appendLogToAgent("gen", (5.4 + i * 0.15).toFixed(2), `[OK] Saved: ${app.pbitName} + ${app.pbipName} in ${app.projectDir}`), 5400 + i * 150);
         });
         setTimeout(() => {
-            appendLogToAgent("gen", "6.8", `[SUCCESS] 100% Autonomous Migration Completed! ${runApps.length} Power BI project(s) ready in Artifacts.`);
+            appendLogToAgent("gen", "6.8", `[SUCCESS] 100% Autonomous Migration Completed! ${runApps.length} Power BI project(s) built.`);
             setAgentBadge("gen", "COMPLETED", "completed");
         }, 6800);
 
@@ -3019,11 +2910,11 @@ ${(appData.gaps && appData.gaps.length)
             };
             renderAgentDetailTabs();
 
-            // 2. Change button to SUCCESS & make it clickable to jump to Artifacts
+            // 2. Change button to SUCCESS & make it clickable to jump to the history
             btnElem.disabled = false;
             btnElem.classList.remove("running-btn");
             btnElem.classList.add("success-btn");
-            btnElem.innerHTML = `<i class="fa-solid fa-circle-check"></i> Migration Completed! View Artifacts ->`;
+            btnElem.innerHTML = `<i class="fa-solid fa-circle-check"></i> Migration Completed! View migration history -&gt;`;
         }, 7500);
     }
 
@@ -3307,10 +3198,20 @@ ${(appData.gaps && appData.gaps.length)
         return key;
     }
 
-    // ---------- App picker (one checkbox per app the tenant listed) ----------
+    // ---------- App picker (a dropdown of one checkbox per app) ----------
 
     function appCheckboxes() {
         return Array.from(document.querySelectorAll("#qlik-app-list .app-check-input"));
+    }
+
+    // Only the rows the filter is currently letting through. "Select all" acts on
+    // these, so typing a filter and hitting it selects what is on screen rather
+    // than silently ticking apps the user cannot see.
+    function visibleAppCheckboxes() {
+        return appCheckboxes().filter(cb => {
+            const row = cb.closest(".app-check");
+            return row && !row.classList.contains("filtered-out");
+        });
     }
 
     // Every app the user has ticked, in the order the tenant listed them. The name
@@ -3331,8 +3232,11 @@ ${(appData.gaps && appData.gaps.length)
             // `id` first answers 404 on every app, so resourceId must win.
             const id = app.resourceId || app.id || "";
             const name = app.name || "Unnamed App";
+            // The filter matches on both, so both are kept on the row rather than
+            // read back out of the rendered text.
+            const haystack = `${name} ${id}`.toLowerCase();
             return `
-                <label class="app-check">
+                <label class="app-check" data-search="${escapeHtml(haystack)}">
                     <input type="checkbox" class="app-check-input" value="${escapeHtml(id)}" data-name="${escapeHtml(name)}">
                     <span class="app-check-box"><i class="fa-solid fa-check"></i></span>
                     <span class="app-check-text">
@@ -3345,25 +3249,111 @@ ${(appData.gaps && appData.gaps.length)
         host.querySelectorAll(".app-check-input").forEach(cb => {
             cb.addEventListener("change", updateAppSelectionCount);
         });
+
+        // A re-list is a different tenant or a different key, so an old filter must
+        // not hide rows the user has never seen.
+        const search = document.getElementById("app-search");
+        if (search) search.value = "";
+        applyAppFilter();
         updateAppSelectionCount();
+    }
+
+    // Narrows the visible rows without touching any tick, so a selection made
+    // under one filter survives the next one.
+    function applyAppFilter() {
+        const search = document.getElementById("app-search");
+        const term = search ? search.value.trim().toLowerCase() : "";
+        const rows = Array.from(document.querySelectorAll("#qlik-app-list .app-check"));
+        let shown = 0;
+        rows.forEach(row => {
+            const hit = !term || (row.dataset.search || "").includes(term);
+            row.classList.toggle("filtered-out", !hit);
+            if (hit) shown++;
+        });
+
+        const empty = document.getElementById("app-filter-empty");
+        if (empty) empty.classList.toggle("hidden", shown > 0 || !rows.length);
+
+        const counter = document.getElementById("app-filter-count");
+        if (counter) {
+            counter.textContent = term
+                ? `${shown} of ${rows.length} shown`
+                : `${rows.length} app${rows.length === 1 ? "" : "s"} available`;
+        }
     }
 
     function updateAppSelectionCount() {
         const label = document.getElementById("qlik-app-count");
         if (!label) return;
         const total = appCheckboxes().length;
-        const chosen = selectedQlikApps().length;
-        label.textContent = chosen
-            ? `${chosen} of ${total} app${total === 1 ? "" : "s"} selected`
-            : `No apps selected — ${total} available`;
+        const selected = selectedQlikApps();
+        const chosen = selected.length;
+        // The trigger is collapsed most of the time, so it has to say what is
+        // selected on its own. One app is named; more than one is counted.
+        if (!chosen) {
+            label.textContent = `Select apps — ${total} available`;
+        } else if (chosen === 1) {
+            label.textContent = selected[0].name;
+        } else {
+            label.textContent = `${chosen} of ${total} apps selected`;
+        }
         label.classList.toggle("has-selection", chosen > 0);
         syncQlikRunButton();
+    }
+
+    // ---------- Dropdown open/close ----------
+
+    const appDropdownTrigger = document.getElementById("app-dropdown-trigger");
+    const appDropdownPanel = document.getElementById("app-dropdown-panel");
+
+    function setAppDropdownOpen(open) {
+        if (!appDropdownTrigger || !appDropdownPanel) return;
+        appDropdownPanel.classList.toggle("hidden", !open);
+        appDropdownTrigger.setAttribute("aria-expanded", open ? "true" : "false");
+        if (open) {
+            const search = document.getElementById("app-search");
+            if (search) search.focus();
+        }
+    }
+
+    function appDropdownIsOpen() {
+        return !!appDropdownPanel && !appDropdownPanel.classList.contains("hidden");
+    }
+
+    if (appDropdownTrigger) {
+        appDropdownTrigger.addEventListener("click", () => {
+            setAppDropdownOpen(!appDropdownIsOpen());
+        });
+    }
+
+    // Clicking anywhere else closes it — including the other card, so the panel
+    // never sits over fields the user has moved on to.
+    document.addEventListener("click", (e) => {
+        const dropdown = document.getElementById("app-dropdown");
+        if (!dropdown || !appDropdownIsOpen()) return;
+        if (!dropdown.contains(e.target)) setAppDropdownOpen(false);
+    });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape" || !appDropdownIsOpen()) return;
+        setAppDropdownOpen(false);
+        if (appDropdownTrigger) appDropdownTrigger.focus();
+    });
+
+    const appSearch = document.getElementById("app-search");
+    if (appSearch) {
+        appSearch.addEventListener("input", applyAppFilter);
+        // A search box swallows Escape to clear itself first; the panel should
+        // close on the first press regardless.
+        appSearch.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") e.preventDefault();
+        });
     }
 
     const btnSelectAllApps = document.getElementById("btn-select-all-apps");
     if (btnSelectAllApps) {
         btnSelectAllApps.addEventListener("click", () => {
-            appCheckboxes().forEach(cb => { cb.checked = true; });
+            visibleAppCheckboxes().forEach(cb => { cb.checked = true; });
             updateAppSelectionCount();
         });
     }
@@ -3371,6 +3361,8 @@ ${(appData.gaps && appData.gaps.length)
     const btnClearApps = document.getElementById("btn-clear-apps");
     if (btnClearApps) {
         btnClearApps.addEventListener("click", () => {
+            // Clears everything, not just what the filter is showing — a "Clear"
+            // that left hidden ticks behind would contradict the trigger's count.
             appCheckboxes().forEach(cb => { cb.checked = false; });
             updateAppSelectionCount();
         });
@@ -3378,36 +3370,39 @@ ${(appData.gaps && appData.gaps.length)
 
     // ---------- What the run produces ----------
 
-    // "download" needs nothing beyond the Qlik connection; "fabric" additionally
-    // records where the projects are meant to land.
-    function qlikOutputMode() {
-        const picked = document.querySelector('input[name="qlik-output-mode"]:checked');
-        return picked ? picked.value : "download";
+    // Writes the outcome of a connection attempt into the card that made it.
+    // A modal would have to be dismissed before the fields it describes could be
+    // corrected, and multi-line Entra/Qlik errors are unreadable in one.
+    const CONN_STATUS_ICON = {
+        error: "fa-circle-exclamation",
+        success: "fa-circle-check",
+        info: "fa-circle-info"
+    };
+
+    function setConnStatus(hostId, kind, message) {
+        const host = document.getElementById(hostId);
+        if (!host) return;
+        if (!message) {
+            host.classList.add("hidden");
+            host.textContent = "";
+            return;
+        }
+        host.className = `conn-status is-${kind}`;
+        host.innerHTML = `<i class="fa-solid ${CONN_STATUS_ICON[kind] || CONN_STATUS_ICON.info}"></i><span></span>`;
+        // Server text goes in as text, never as markup.
+        host.querySelector("span").textContent = message;
     }
 
-    // The Fabric credentials are only asked for when a Fabric destination is
-    // actually wanted, so the download path never presents fields it will not use.
-    function applyQlikOutputMode() {
-        const wantsFabric = qlikOutputMode() === "fabric";
-        const fabricBox = document.getElementById("fabric-target-container");
-        if (fabricBox) fabricBox.style.display = wantsFabric ? "block" : "none";
-        syncQlikRunButton();
+    function clearConnStatus(hostId) {
+        setConnStatus(hostId, "info", "");
     }
 
-    // The button says what it will actually do, which differs between the two modes.
     function syncQlikRunButton() {
         const btn = document.getElementById("btn-migrate-qlik");
         if (!btn || btn.disabled || btn.classList.contains("success-btn")) return;
         const count = selectedQlikApps().length;
-        const suffix = count ? ` (${count})` : "";
-        btn.innerHTML = qlikOutputMode() === "fabric"
-            ? `Migrate to Microsoft Fabric${suffix}`
-            : `Generate &amp; download artifacts${suffix}`;
+        btn.innerHTML = `Migrate to Microsoft Fabric${count ? ` (${count})` : ""}`;
     }
-
-    document.querySelectorAll('input[name="qlik-output-mode"]').forEach(radio => {
-        radio.addEventListener("change", applyQlikOutputMode);
-    });
 
     const btnTestConnection = document.getElementById("btn-test-connection");
     if (btnTestConnection) {
@@ -3416,8 +3411,9 @@ ${(appData.gaps && appData.gaps.length)
             const apiKeyInput = document.getElementById("qlik-api-key");
             const tenantUrl = tenantUrlInput ? tenantUrlInput.value.trim() : "";
             const apiKey = normaliseApiKey(apiKeyInput ? apiKeyInput.value : "");
+            clearConnStatus("qlik-status");
             if (!tenantUrl || !apiKey) {
-                alert("Please enter both Tenant URL and API Key.");
+                setConnStatus("qlik-status", "error", "Please enter both Tenant URL and API Key.");
                 return;
             }
 
@@ -3428,7 +3424,7 @@ ${(appData.gaps && appData.gaps.length)
             // named exactly, rather than coming back as an indistinguishable 401.
             const keyProblem = inspectApiKey(apiKey, cleanUrl);
             if (keyProblem) {
-                alert(keyProblem);
+                setConnStatus("qlik-status", "error", keyProblem);
                 if (apiKeyInput) apiKeyInput.focus();
                 return;
             }
@@ -3455,27 +3451,27 @@ ${(appData.gaps && appData.gaps.length)
                 const apps = data.data || [];
 
                 if (apps.length === 0) {
-                    alert("Connected successfully, but no apps were found.");
+                    setConnStatus("qlik-status", "info",
+                        "Connected successfully, but this tenant listed no apps for the key to read.");
                 } else {
                     renderQlikAppList(apps);
 
                     qlikConnection = { baseUrl: cleanUrl, apiKey: apiKey };
 
                     document.getElementById("qlik-apps-container").style.display = "block";
-                    document.getElementById("qlik-output-container").style.display = "block";
-                    document.getElementById("btn-migrate-qlik").style.display = "block";
-                    // Honours whichever output the radio is on; the Fabric fields stay
-                    // hidden while the run is only meant to produce downloads.
-                    applyQlikOutputMode();
+                    syncQlikRunButton();
                     btnTestConnection.style.display = "none";
-                    alert(`Connection Successful! Loaded ${apps.length} apps.`);
+                    setConnStatus("qlik-status", "success",
+                        `Connected. Loaded ${apps.length} app${apps.length === 1 ? "" : "s"} — tick the ones to migrate.`);
                 }
             } catch (err) {
                 console.error(err);
                 if (err.name === "TypeError" && (err.message.includes("fetch") || err.message.includes("Network"))) {
-                    alert(`The browser blocked the request before it reached Qlik (CORS).\n\nIn the Qlik Management Console -> Content Security Policy, add an origin entry for '${window.location.origin}' with Connect-src enabled.`);
+                    setConnStatus("qlik-status", "error",
+                        "The browser blocked the request before it reached Qlik (CORS).\n\n" +
+                        `In the Qlik Management Console → Content Security Policy, add an origin entry for '${window.location.origin}' with Connect-src enabled.`);
                 } else {
-                    alert("Connection Failed: " + err.message);
+                    setConnStatus("qlik-status", "error", `Connection failed.\n\n${err.message}`);
                 }
             } finally {
                 btnTestConnection.innerHTML = "Test Connection";
@@ -3628,16 +3624,17 @@ ${(appData.gaps && appData.gaps.length)
                 ["Client (Application) ID", clientId],
                 ["Client secret", clientSecret]
             ].filter(pair => !pair[1]).map(pair => pair[0]);
+            clearConnStatus("fabric-status");
             if (missing.length) {
-                alert(`Please fill in: ${missing.join(", ")}.`);
+                setConnStatus("fabric-status", "error", `Please fill in: ${missing.join(", ")}.`);
                 return;
             }
 
             if (!fabricRelayAvailable()) {
-                alert(
+                setConnStatus("fabric-status", "error",
                     "Fabric cannot be reached when this page is opened straight from disk.\n\n" +
-                    "Microsoft's token endpoint refuses a client secret sent from a browser, so " +
-                    "the sign-in has to go through the local relay:\n  python dev_server.py\n\n" +
+                    "Microsoft's token endpoint refuses a client secret sent from a browser, so the " +
+                    "sign-in has to go through the local relay:\n  python dev_server.py\n\n" +
                     "You can still type the workspace name or ID by hand for this run."
                 );
                 enableFabricManualEntry("no-relay");
@@ -3663,7 +3660,7 @@ ${(appData.gaps && appData.gaps.length)
                 const usable = workspaces.filter(ws => ws.type !== "Personal");
 
                 if (!usable.length) {
-                    alert(
+                    setConnStatus("fabric-status", "error",
                         "Signed in to Microsoft Fabric, but this service principal can see no workspaces.\n\n" +
                         "Add it to the target workspace as Admin, Member or Contributor " +
                         "(Workspace → Manage access), and confirm the tenant setting " +
@@ -3699,16 +3696,15 @@ ${(appData.gaps && appData.gaps.length)
                 document.getElementById("fabric-extra-fields").style.display = "block";
                 btnTestFabric.style.display = "none";
 
-                alert(`Connected to Microsoft Fabric. Loaded ${usable.length} workspace${usable.length === 1 ? "" : "s"}.`);
+                setConnStatus("fabric-status", "success",
+                    `Connected. Loaded ${usable.length} workspace${usable.length === 1 ? "" : "s"} — pick the destination below.`);
             } catch (err) {
                 console.error(err);
                 if (err.name === "TypeError") {
-                    alert(
-                        "The browser could not reach the local relay.\n\n" +
-                        "Start the app with:  python dev_server.py"
-                    );
+                    setConnStatus("fabric-status", "error",
+                        "The browser could not reach the local relay.\n\nStart the app with:  python dev_server.py");
                 } else {
-                    alert("Fabric connection failed:\n\n" + err.message);
+                    setConnStatus("fabric-status", "error", `Fabric connection failed.\n\n${err.message}`);
                 }
             } finally {
                 btnTestFabric.disabled = false;

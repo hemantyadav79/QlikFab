@@ -80,7 +80,7 @@
                     </div>
                 </div>
 
-                <a href="#artifacts" class="nav-item" data-tab="tab-artifacts">Artifacts</a>
+                <a href="#logs" class="nav-item" data-tab="tab-logs">Logs</a>
                 <a href="#job-history" class="nav-item" data-tab="tab-history">Migration history</a>
             </nav>
         </aside>
@@ -117,63 +117,14 @@
             <!-- TAB 1: RUN MIGRATION (DEFAULT) -->
             <section id="tab-run" class="tab-pane active">
                 <!--
-                  First screen: pick a source. Only the chosen path is rendered after
-                  this, so the two migration routes are never both live at once.
+                  Source on the left, destination on the right. The two connections are
+                  independent: neither side waits on the other, so both can be filled in
+                  and tested in any order. Failures are reported inside the card that
+                  owns them rather than in a modal.
                 -->
-                <div class="mode-chooser" id="mode-chooser">
-                    <h2>How do you want to migrate?</h2>
-                    <p class="tab-desc">Pick a source to begin. You can switch back at any time before starting a run.</p>
-
-                    <div class="mode-grid">
-                        <button type="button" class="mode-card" data-mode="file">
-                            <span class="mode-icon"><i class="fa-solid fa-file-arrow-up"></i></span>
-                            <span class="mode-title">Without a Qlik connection</span>
-                            <span class="mode-desc">Upload up to 10 <b>.qvf</b> files (or <b>.zip</b> archives) from this machine. Nothing leaves the browser.</span>
-                            <span class="mode-go">Choose this <i class="fa-solid fa-arrow-right"></i></span>
-                        </button>
-
-                        <button type="button" class="mode-card" data-mode="qlik">
-                            <span class="mode-icon"><i class="fa-solid fa-cloud"></i></span>
-                            <span class="mode-title">With a Qlik connection</span>
-                            <span class="mode-desc">Connect to your Qlik Cloud tenant, pick a live app, and set the Microsoft Fabric destination.</span>
-                            <span class="mode-go">Choose this <i class="fa-solid fa-arrow-right"></i></span>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Shown once a source is chosen. -->
-                <div class="mode-bar hidden" id="mode-bar">
-                    <span class="mode-bar-label">Source: <b id="mode-bar-name">—</b></span>
-                    <button type="button" class="btn-link" id="btn-change-mode">
-                        <i class="fa-solid fa-arrow-left"></i> Back to source choice
-                    </button>
-                </div>
-
-                <div class="migration-grid single hidden" id="migration-grid">
-                    <!-- PATH A: WORKS WITH NO QLIK CONNECTION -->
-                    <div class="migration-card primary-card hidden" id="mode-pane-file">
-                        <h2>Works with no Qlik connection.</h2>
-                        
-                        <!-- HIDDEN FILE INPUT FOR BROWSE / UPLOAD FROM PC (UP TO 10 FILES AT ONCE, .QVF OR .ZIP) -->
-                        <input type="file" id="qvf-file-input" accept=".qvf,.zip" multiple style="display: none;">
-
-                        <!-- DROPZONE BOX CLICKABLE TO BROWSE FILES -->
-                        <div class="file-upload-box" id="dropzone" title="Click to browse & upload up to 10 .qvf files (or .zip archives containing them) from your PC">
-                            <i class="fa-solid fa-file-arrow-up"></i>
-                            <div class="upload-label">
-                                <b id="dropzone-name">Helpdesk Management.qvf</b>
-                                <span id="dropzone-size">1.96 MB</span>
-                            </div>
-                            <span class="remove-file" id="btn-browse-file" title="Browse & Upload up to 10 .QVF Files or .ZIP archives from your computer"><i class="fa-solid fa-folder-open"></i></span>
-                        </div>
-
-                        <button id="btn-start-migration" class="btn-primary-block">
-                            Start migration
-                        </button>
-                    </div>
-
-                    <!-- PATH B: LIVE QLIK CLOUD REST CONNECTION -->
-                    <div class="migration-card secondary-card hidden" id="mode-pane-qlik">
+                <div class="migration-grid" id="migration-grid">
+                    <!-- SOURCE: LIVE QLIK CLOUD REST CONNECTION -->
+                    <div class="migration-card secondary-card" id="mode-pane-qlik">
                         <h2><i class="fa-solid fa-cloud"></i> Connect to Qlik Cloud</h2>
 
                         <div class="form-group">
@@ -192,280 +143,191 @@
                             add this app's origin under <b>Management Console &rarr; Content Security Policy</b>.
                         </p>
 
-                        <button id="btn-test-connection" class="btn-secondary-block" style="margin-bottom: 15px;">
+                        <button id="btn-test-connection" class="btn-secondary-block">
                             Test Connection
                         </button>
 
+                        <!-- Whatever the last Qlik call reported, success or failure. -->
+                        <div class="conn-status hidden" id="qlik-status" role="status" aria-live="polite"></div>
+
                         <div id="qlik-apps-container" class="form-group" style="display: none;">
-                            <label>Select apps to migrate</label>
-                            <!-- A checkbox per app rather than a native multi-select: every
-                                 row's state is visible at once and picking several needs no
-                                 modifier key. Each ticked app becomes its own PBIP project,
-                                 the same way a multi-file .qvf upload does. Rows are
-                                 injected by script.js once the tenant has listed them. -->
-                            <div id="qlik-app-list" class="app-checklist" role="group" aria-label="Apps to migrate"></div>
-                            <div class="select-toolbar">
-                                <span class="select-count" id="qlik-app-count">No apps selected</span>
-                                <span class="select-actions">
-                                    <button type="button" class="btn-link" id="btn-select-all-apps">Select all</button>
-                                    <button type="button" class="btn-link" id="btn-clear-apps">Clear</button>
-                                </span>
-                            </div>
-                        </div>
+                            <label id="qlik-app-label">Select apps to migrate</label>
+                            <!--
+                              A collapsed dropdown rather than an inline list: a tenant can
+                              list hundreds of apps, and the card must not grow with the
+                              tenant. The panel holds a filter and a scrolling checkbox per
+                              app — a checkbox rather than a native <select multiple> so
+                              picking several needs no modifier key, and so the selection
+                              survives filtering. Each ticked app becomes its own PBIP
+                              project. Rows are injected by script.js.
+                            -->
+                            <div class="app-dropdown" id="app-dropdown">
+                                <button type="button" class="app-dropdown-trigger" id="app-dropdown-trigger"
+                                        aria-expanded="false" aria-controls="app-dropdown-panel"
+                                        aria-labelledby="qlik-app-label qlik-app-count">
+                                    <span class="select-count" id="qlik-app-count">No apps selected</span>
+                                    <i class="fa-solid fa-chevron-down app-dropdown-caret" aria-hidden="true"></i>
+                                </button>
 
-                        <!-- What the run produces. Downloading artifacts needs nothing but
-                             the Qlik connection, so the Fabric credentials below are asked
-                             for only when a Fabric destination is actually wanted. -->
-                        <div id="qlik-output-container" class="form-group" style="display: none;">
-                            <div class="form-section-title"><i class="fa-solid fa-flag-checkered"></i> What should the run produce?</div>
-                            <div class="dest-choice" role="radiogroup" aria-label="Run output">
-                                <label class="dest-option">
-                                    <input type="radio" name="qlik-output-mode" value="download" checked>
-                                    <span class="dest-option-inner">
-                                        <span class="dest-option-icon"><i class="fa-solid fa-box-open"></i></span>
-                                        <span class="dest-option-text">
-                                            <b>Download artifacts only</b>
-                                            <span>Build the .pbip / .pbit projects and take them from the Artifacts tab. No Microsoft Fabric account needed.</span>
+                                <div class="app-dropdown-panel hidden" id="app-dropdown-panel">
+                                    <div class="app-dropdown-search">
+                                        <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                                        <input type="search" id="app-search" class="app-search-input"
+                                               placeholder="Filter by app name or ID" autocomplete="off"
+                                               aria-label="Filter apps">
+                                    </div>
+
+                                    <div id="qlik-app-list" class="app-checklist" role="group" aria-label="Apps to migrate"></div>
+
+                                    <p class="app-dropdown-empty hidden" id="app-filter-empty">No app matches that filter.</p>
+
+                                    <div class="select-toolbar app-dropdown-foot">
+                                        <span class="select-count" id="app-filter-count"></span>
+                                        <span class="select-actions">
+                                            <button type="button" class="btn-link" id="btn-select-all-apps">Select all</button>
+                                            <button type="button" class="btn-link" id="btn-clear-apps">Clear</button>
                                         </span>
-                                        <span class="dest-option-tick"><i class="fa-solid fa-circle-check"></i></span>
-                                    </span>
-                                </label>
-                                <label class="dest-option">
-                                    <input type="radio" name="qlik-output-mode" value="fabric">
-                                    <span class="dest-option-inner">
-                                        <span class="dest-option-icon"><i class="fa-solid fa-bullseye"></i></span>
-                                        <span class="dest-option-text">
-                                            <b>Record a Microsoft Fabric destination</b>
-                                            <span>Also name the workspace the projects are meant for. It is written into the audit report — the files are still downloaded, not published.</span>
-                                        </span>
-                                        <span class="dest-option-tick"><i class="fa-solid fa-circle-check"></i></span>
-                                    </span>
-                                </label>
+                                    </div>
+                                </div>
                             </div>
                         </div>
+                    </div>
 
-                        <!-- Destination in Microsoft Fabric. Recorded with the run and
-                             written into the audit report; this client does not publish. -->
-                        <div id="fabric-target-container" style="display: none;">
-                            <div class="form-section-title"><i class="fa-solid fa-bullseye"></i> Microsoft Fabric destination</div>
+                    <!-- DESTINATION: MICROSOFT FABRIC -->
+                    <div class="migration-card secondary-card" id="fabric-target-container">
+                        <h2><i class="fa-solid fa-bullseye"></i> Connect to Microsoft Fabric</h2>
 
-                            <p class="form-hint">
-                                Sign in with a <b>Microsoft Entra ID service principal</b> (app registration) that has
-                                access to your Fabric tenant. Its three values come from the Azure portal &rarr;
-                                <b>Microsoft Entra ID &rarr; App registrations &rarr; your app</b>.
-                            </p>
+                        <p class="form-hint">
+                            Sign in with a <b>Microsoft Entra ID service principal</b> (app registration) that has
+                            access to your Fabric tenant. Its three values come from the Azure portal &rarr;
+                            <b>Microsoft Entra ID &rarr; App registrations &rarr; your app</b>.
+                        </p>
 
-                            <div class="form-group">
-                                <label>Tenant (Directory) ID</label>
-                                <input type="text" id="fabric-tenant-id" class="custom-input" placeholder="72f988bf-86f1-41af-91ab-2d7cd011db47" autocomplete="off">
-                            </div>
-
-                            <div class="form-group">
-                                <label>Client (Application) ID</label>
-                                <input type="text" id="fabric-client-id" class="custom-input" placeholder="a1b2c3d4-e5f6-7890-abcd-ef1234567890" autocomplete="off">
-                            </div>
-
-                            <div class="form-group">
-                                <label>Client secret</label>
-                                <input type="password" id="fabric-client-secret" class="custom-input" placeholder="Client secret VALUE (not the Secret ID)" autocomplete="off">
-                            </div>
-
-                            <p class="form-hint">
-                                Copy the secret's <b>Value</b> from <b>Certificates &amp; secrets</b> — it is shown once, at
-                                creation. Two things must also be true in the tenant, or the call returns an empty list:
-                                a Fabric admin has enabled <b>Admin portal &rarr; Tenant settings &rarr; Service principals
-                                can use Fabric APIs</b> for a group the app belongs to, and the app has been added to each
-                                workspace as <b>Admin</b>, <b>Member</b> or <b>Contributor</b>. Nothing is stored — the
-                                values are used for this session only.
-                            </p>
-
-                            <button id="btn-test-fabric" class="btn-secondary-block" style="margin-bottom: 15px;">
-                                Test Fabric Connection
-                            </button>
-
-                            <div id="fabric-workspace-container" class="form-group" style="display: none;">
-                                <label>Select the workspace to migrate into</label>
-                                <select id="fabric-workspace-select" class="custom-input">
-                                    <option value="">Select a workspace...</option>
-                                </select>
-                            </div>
-
-                            <div id="fabric-workspace-manual" class="form-group" style="display: none;">
-                                <label>Workspace name or ID</label>
-                                <input type="text" id="fabric-workspace" class="custom-input" placeholder="Finance Analytics  —  or  a1b2c3d4-e5f6-...">
-                            </div>
-
-                            <div id="fabric-extra-fields" style="display: none;">
-                                <div class="form-group">
-                                    <label>Capacity ID (optional)</label>
-                                    <input type="text" id="fabric-capacity" class="custom-input" placeholder="Filled in from the selected workspace">
-                                </div>
-
-                                <div class="form-group">
-                                    <label>Item name prefix (optional)</label>
-                                    <input type="text" id="fabric-prefix" class="custom-input" placeholder="Defaults to the Qlik app name">
-                                </div>
-
-                                <p class="form-hint">
-                                    The destination is recorded with the run and written into the audit report.
-                                    This browser client generates the <b>.pbip</b> / <b>.pbit</b> for you to download —
-                                    it does not publish to the workspace on your behalf.
-                                </p>
-                            </div>
+                        <div class="form-group">
+                            <label>Tenant (Directory) ID</label>
+                            <input type="text" id="fabric-tenant-id" class="custom-input" placeholder="72f988bf-86f1-41af-91ab-2d7cd011db47" autocomplete="off">
                         </div>
 
-                        <button id="btn-migrate-qlik" class="btn-secondary-block" style="display: none;">
-                            Migrate Selected Apps
+                        <div class="form-group">
+                            <label>Client (Application) ID</label>
+                            <input type="text" id="fabric-client-id" class="custom-input" placeholder="a1b2c3d4-e5f6-7890-abcd-ef1234567890" autocomplete="off">
+                        </div>
+
+                        <div class="form-group">
+                            <label>Client secret</label>
+                            <input type="password" id="fabric-client-secret" class="custom-input" placeholder="Client secret VALUE (not the Secret ID)" autocomplete="off">
+                        </div>
+
+                        <p class="form-hint">
+                            Copy the secret's <b>Value</b> from <b>Certificates &amp; secrets</b> — it is shown once, at
+                            creation. Two things must also be true in the tenant, or the call returns an empty list:
+                            a Fabric admin has enabled <b>Admin portal &rarr; Tenant settings &rarr; Service principals
+                            can use Fabric APIs</b> for a group the app belongs to, and the app has been added to each
+                            workspace as <b>Admin</b>, <b>Member</b> or <b>Contributor</b>. Nothing is stored — the
+                            values are used for this session only.
+                        </p>
+
+                        <button id="btn-test-fabric" class="btn-secondary-block">
+                            Test Fabric Connection
                         </button>
+
+                        <!-- Whatever the last Fabric call reported, success or failure. -->
+                        <div class="conn-status hidden" id="fabric-status" role="status" aria-live="polite"></div>
+
+                        <div id="fabric-workspace-container" class="form-group" style="display: none;">
+                            <label>Select the workspace to migrate into</label>
+                            <select id="fabric-workspace-select" class="custom-input">
+                                <option value="">Select a workspace...</option>
+                            </select>
+                        </div>
+
+                        <div id="fabric-workspace-manual" class="form-group">
+                            <label>Workspace name or ID</label>
+                            <input type="text" id="fabric-workspace" class="custom-input" placeholder="Finance Analytics  —  or  a1b2c3d4-e5f6-...">
+                        </div>
+
+                        <div id="fabric-extra-fields">
+                            <div class="form-group">
+                                <label>Capacity ID (optional)</label>
+                                <input type="text" id="fabric-capacity" class="custom-input" placeholder="Filled in from the selected workspace">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Item name prefix (optional)</label>
+                                <input type="text" id="fabric-prefix" class="custom-input" placeholder="Defaults to the Qlik app name">
+                            </div>
+
+                            <p class="form-hint">
+                                The destination is recorded with the run and written into the audit report.
+                                This browser client generates the <b>.pbip</b> / <b>.pbit</b> for you to download —
+                                it does not publish to the workspace on your behalf.
+                            </p>
+                        </div>
                     </div>
                 </div>
 
-                <div class="tab-footer-caption hidden" id="mode-footer-caption"></div>
-
-                <!-- AUTOGEN LIVE CONSOLE MODAL / PANEL -->
-                <div id="autogen-console" class="autogen-console-card hidden">
-                    <div class="console-header">
-                        <div class="console-title"><i class="fa-solid fa-terminal"></i> Migration engine — live output</div>
-                        <div class="console-status" id="console-status-badge"><span class="pulse-dot"></span> RUNNING</div>
-                    </div>
-                    <!-- 4 AUTONOMOUS AGENTS LIVE STREAMING DECK -->
-                    <div class="autogen-4agents-grid" id="autogen-4agents-grid">
-                        <!-- Phase 1: Assessment -->
-                        <div class="agent-live-box">
-                            <div class="agent-live-header">
-                                <div class="agent-live-identity">
-                                    <div class="agent-live-avatar" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fa-solid fa-user-shield"></i></div>
-                                    <div class="agent-live-names">
-                                        <h4>Assessment</h4>
-                                        <span>Phase 1: .qvf binary, load script &amp; schema</span>
-                                    </div>
-                                </div>
-                                <span class="agent-badge-tag" id="badge-agent-assess">IDLE</span>
-                            </div>
-                            <div class="agent-live-logs" id="logs-agent-assess"></div>
-                        </div>
-
-                        <!-- Phase 2: Parsing -->
-                        <div class="agent-live-box">
-                            <div class="agent-live-header">
-                                <div class="agent-live-identity">
-                                    <div class="agent-live-avatar" style="background: linear-gradient(135deg, #06b6d4, #0891b2);"><i class="fa-solid fa-diagram-project"></i></div>
-                                    <div class="agent-live-names">
-                                        <h4>Parsing</h4>
-                                        <span>Phase 2: model.bim — tables, columns, DAX</span>
-                                    </div>
-                                </div>
-                                <span class="agent-badge-tag" id="badge-agent-parse">IDLE</span>
-                            </div>
-                            <div class="agent-live-logs" id="logs-agent-parse"></div>
-                        </div>
-
-                        <!-- Phase 3: Mapping -->
-                        <div class="agent-live-box">
-                            <div class="agent-live-header">
-                                <div class="agent-live-identity">
-                                    <div class="agent-live-avatar" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);"><i class="fa-solid fa-brain"></i></div>
-                                    <div class="agent-live-names">
-                                        <h4>Mapping</h4>
-                                        <span>Phase 3: report pages &amp; visuals</span>
-                                    </div>
-                                </div>
-                                <span class="agent-badge-tag" id="badge-agent-map">IDLE</span>
-                            </div>
-                            <div class="agent-live-logs" id="logs-agent-map"></div>
-                        </div>
-
-                        <!-- Phase 4: Report Generation -->
-                        <div class="agent-live-box">
-                            <div class="agent-live-header">
-                                <div class="agent-live-identity">
-                                    <div class="agent-live-avatar" style="background: linear-gradient(135deg, #10b981, #047857);"><i class="fa-solid fa-boxes-packing"></i></div>
-                                    <div class="agent-live-names">
-                                        <h4>Report Generation</h4>
-                                        <span>Phase 4: .pbit, audit report &amp; PBIP bundle</span>
-                                    </div>
-                                </div>
-                                <span class="agent-badge-tag" id="badge-agent-gen">IDLE</span>
-                            </div>
-                            <div class="agent-live-logs" id="logs-agent-gen"></div>
-                        </div>
-                    </div>
-                    <!-- Hidden backwards compatibility log container -->
-                    <div class="console-logs hidden" id="console-logs-body"></div>
-                    <div class="console-metrics hidden" id="console-metrics-row">
-                        <div class="metric-card">
-                            <span>Sheets Converted</span>
-                            <b id="metric-sheets">2 Pages</b>
-                        </div>
-                        <div class="metric-card">
-                            <span>Visuals Mapped</span>
-                            <b id="metric-visuals">10 Charts</b>
-                        </div>
-                        <div class="metric-card">
-                            <span>DAX Measures</span>
-                            <b id="metric-dax">12 Auto-Mapped</b>
-                        </div>
-                        <div class="metric-card">
-                            <span>Discrepancy Check</span>
-                            <b id="metric-discrepancy">Not computed</b>
-                        </div>
-                    </div>
+                <!-- Spans both columns: the run needs a source and a destination. -->
+                <div class="run-bar">
+                    <div class="conn-status hidden" id="run-status" role="alert" aria-live="assertive"></div>
+                    <button id="btn-migrate-qlik" class="btn-secondary-block">
+                        Migrate to Microsoft Fabric
+                    </button>
                 </div>
             </section>
 
-            <!-- TAB: ARTIFACTS -->
-            <section id="tab-artifacts" class="tab-pane">
-                <h2>Phase 4: Generated Power BI Artifacts</h2>
-                <p class="tab-desc">All standalone templates, Fabric projects, and audit logs stored in <code id="artifact-dir-subtitle">Helpdesk_PowerBI_Project/</code></p>
+            <!--
+              TAB: LOGS
+              One stream for the whole run. The four phases used to each own a box on
+              the Run migration tab, which meant four short scrollbacks and no way to
+              read the run in the order it happened. Every line lands here tagged with
+              the phase that emitted it, and the chips filter down to one phase.
+            -->
+            <section id="tab-logs" class="tab-pane">
+                <h2>Migration engine — logs</h2>
+                <p class="tab-desc">Every line the four phases emitted, in the order they happened. The stream is replaced at the start of each run.</p>
 
-                <div class="artifacts-downloads">
-                    <!-- Nothing is downloadable until a run has actually produced it. -->
-                    <div class="agent-empty-state" id="artifacts-empty-state">
-                        <i class="fa-solid fa-box-open"></i>
-                        <h3>No artifacts generated yet</h3>
-                        <p>Power BI files appear here once a migration run completes. Upload one or more
-                           <b>.qvf</b> files on the <b>Run migration</b> tab and start the run.</p>
+                <div class="logs-toolbar">
+                    <div class="log-filters" role="group" aria-label="Filter by phase">
+                        <button type="button" class="log-filter active" data-phase="all">All</button>
+                        <button type="button" class="log-filter" data-phase="assess">Assessment</button>
+                        <button type="button" class="log-filter" data-phase="parse">Parsing</button>
+                        <button type="button" class="log-filter" data-phase="map">Mapping</button>
+                        <button type="button" class="log-filter" data-phase="gen">Report Generation</button>
                     </div>
-
-                    <div class="artifacts-grid hidden" id="artifacts-grid">
-                        <div class="artifact-card" style="border: 2px solid #00c853; box-shadow: 0 0 15px rgba(0, 200, 83, 0.2);">
-                            <div class="art-icon" style="color: #00c853;"><i class="fa-solid fa-folder-tree"></i></div>
-                            <div class="art-details">
-                                <h3 id="artifact-pbip-title">Helpdesk Management.pbip <span style="background: #00c853; color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 12px; margin-left: 8px;">★ RECOMMENDED (DATA + VISUALS)</span></h3>
-                                <p><b>100% Data & Visuals Included!</b> Full Microsoft Fabric PBIP Project with 100 rows of data and KPI Charts. <b style="color: #00c853;">👉 Step 1: Extract (Unzip) downloaded folder. 👉 Step 2: Double-click the .pbip file inside!</b></p>
-                                <div class="art-meta" style="color: #00c853; font-weight: 600;">Project Bundle • Full Tabular Data & Canvas Charts Included</div>
-                            </div>
-                            <button class="btn-download" id="artifact-pbip-btn" style="background: #00c853; color: white; font-weight: bold;">
-                                <i class="fa-solid fa-download"></i> Download .PBIP (Full Data & Visuals - RECOMMENDED)
-                            </button>
-                        </div>
-
-                        <div class="artifact-card">
-                            <div class="art-icon"><i class="fa-solid fa-file-powerpoint"></i></div>
-                            <div class="art-details">
-                                <h3 id="artifact-pbit-title">Helpdesk Management.pbit</h3>
-                                <p>Standalone Power BI Template file (Schema & metadata structure without offline rows).</p>
-                                <div class="art-meta" id="artifact-pbit-meta">Size: 5.3 KB • Standalone Template</div>
-                            </div>
-                            <button class="btn-download" id="artifact-pbit-btn">
-                                <i class="fa-solid fa-bolt"></i> Download .PBIT (Template Schema Only)
-                            </button>
-                        </div>
-
-                        <div class="artifact-card">
-                            <div class="art-icon"><i class="fa-solid fa-file-shield"></i></div>
-                            <div class="art-details">
-                                <h3>MIGRATION_AUDIT_REPORT.md</h3>
-                                <p>Compliance audit report written by the migration engine during the run.</p>
-                                <div class="art-meta">Size: 2.6 KB • Compliance Log</div>
-                            </div>
-                            <button class="btn-download" id="artifact-audit-btn">
-                                <i class="fa-solid fa-file-contract"></i> Open Audit Report
-                            </button>
-                        </div>
+                    <div class="logs-toolbar-actions">
+                        <span class="console-status" id="console-status-badge">IDLE</span>
+                        <button type="button" class="btn-link" id="btn-copy-logs">Copy</button>
                     </div>
                 </div>
 
+                <div class="agent-empty-state" id="logs-empty-state">
+                    <i class="fa-solid fa-terminal"></i>
+                    <h3>No logs yet</h3>
+                    <p>Start a migration on the <b>Run migration</b> tab and the engine's output streams in here.</p>
+                </div>
+
+                <div class="console-logs hidden" id="console-logs-body" role="log" aria-live="polite"></div>
+
+                <p class="log-filter-empty hidden" id="logs-filter-empty">No lines from that phase in this run.</p>
+
+                <div class="console-metrics hidden" id="console-metrics-row">
+                    <div class="metric-card">
+                        <span>Sheets Converted</span>
+                        <b id="metric-sheets">2 Pages</b>
+                    </div>
+                    <div class="metric-card">
+                        <span>Visuals Mapped</span>
+                        <b id="metric-visuals">10 Charts</b>
+                    </div>
+                    <div class="metric-card">
+                        <span>DAX Measures</span>
+                        <b id="metric-dax">12 Auto-Mapped</b>
+                    </div>
+                    <div class="metric-card">
+                        <span>Discrepancy Check</span>
+                        <b id="metric-discrepancy">Not computed</b>
+                    </div>
+                </div>
             </section>
 
             <!--
