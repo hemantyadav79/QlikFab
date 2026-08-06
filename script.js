@@ -65,6 +65,47 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // ----------------------------------------------------------------------
+    // 0.5 MOBILE SIDEBAR TOGGLE
+    // ----------------------------------------------------------------------
+    const sidebar = document.querySelector(".sidebar");
+    const sidebarToggleBtn = document.getElementById("btn-sidebar-toggle");
+    const sidebarOverlay = document.getElementById("sidebar-overlay");
+
+    function toggleSidebar() {
+        if (!sidebar || !sidebarOverlay) return;
+        const isOpen = sidebar.classList.contains("open");
+        if (isOpen) {
+            sidebar.classList.remove("open");
+            sidebarOverlay.classList.remove("active");
+        } else {
+            sidebar.classList.add("open");
+            sidebarOverlay.classList.add("active");
+        }
+    }
+
+    if (sidebarToggleBtn) {
+        sidebarToggleBtn.addEventListener("click", toggleSidebar);
+    }
+    if (sidebarOverlay) {
+        sidebarOverlay.addEventListener("click", toggleSidebar);
+    }
+    
+    window.addEventListener("resize", () => {
+        if (window.innerWidth > 600 && sidebar && sidebar.classList.contains("open")) {
+            sidebar.classList.remove("open");
+            sidebarOverlay.classList.remove("active");
+        }
+    });
+
+    document.querySelectorAll(".nav-item, .nav-subitem").forEach(item => {
+        item.addEventListener("click", () => {
+            if (window.innerWidth <= 600 && sidebar && sidebar.classList.contains("open")) {
+                toggleSidebar();
+            }
+        });
+    });
+
+    // ----------------------------------------------------------------------
     // 1. DYNAMIC QVF APP REGISTRY
     // ----------------------------------------------------------------------
     const APP_REGISTRY = {

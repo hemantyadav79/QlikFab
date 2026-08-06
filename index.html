@@ -25,7 +25,7 @@
         })();
     </script>
 
-    <link rel="stylesheet" href="styles.css?v=20260806_history_init_v1">
+    <link rel="stylesheet" href="styles.css?v=4">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -35,6 +35,8 @@
 </head>
 <body>
     <div class="app-container">
+        <!-- SIDEBAR OVERLAY FOR MOBILE -->
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
         <!-- SIDEBAR NAVIGATION -->
         <aside class="sidebar">
             <div class="sidebar-header">
@@ -99,6 +101,9 @@
             <!-- TOP HEADER -->
             <header class="top-header">
                 <div class="header-lead">
+                    <button type="button" class="sidebar-toggle" id="btn-sidebar-toggle" aria-label="Toggle menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
                     <div class="header-titles">
                         <h1>Qlik <span>→</span> Fabric</h1>
                         <p>Autonomous migration platform</p>
@@ -684,6 +689,6 @@
         </main>
     </div>
 
-    <script src="script.js?v=20260806_history_init_v1"></script>
+    <script src="script.js?v=4"></script>
 </body>
 </html>
