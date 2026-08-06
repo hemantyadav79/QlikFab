@@ -2215,15 +2215,26 @@ ${(appData.gaps && appData.gaps.length)
 
         const history = getJobHistory();
         historyTbody.innerHTML = history.map(h => `
-            <tr>
-                <td><b>${h.id}</b></td>
-                <td>${h.file}</td>
-                <td>${h.sheets}</td>
-                <td>${h.visuals}</td>
-                <td><code>${h.time}</code></td>
-                <td>${h.date}</td>
+            <tr class="history-row" data-job="${escapeHtml(h.id)}" tabindex="0" role="button"
+                title="Open this run's results">
+                <td><b>${escapeHtml(h.id)}</b></td>
+                <td>${escapeHtml(h.file)}</td>
+                <td>${escapeHtml(h.sheets)}</td>
+                <td>${escapeHtml(h.visuals)}</td>
+                <td><code>${escapeHtml(h.time)}</code></td>
+                <td>${escapeHtml(h.date)}</td>
             </tr>
         `).join("");
+
+        historyTbody.querySelectorAll(".history-row").forEach(row => {
+            const open = () => showHistoryDetail(row.getAttribute("data-job"));
+            row.addEventListener("click", open);
+            // Rows are reachable by keyboard, so they must open the same way.
+            row.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+            });
+        });
+        showHistoryList();
     }
 
     function recordNewJobRun(appData, elapsedSeconds) {
@@ -2241,11 +2252,152 @@ ${(appData.gaps && appData.gaps.length)
             sheets: appData.unknownVisuals ? "Not reported" : parts[0].trim(),
             visuals: appData.unknownVisuals || !parts[1] ? "Not reported" : parts[1].trim(),
             time: typeof elapsedSeconds === "number" ? elapsedSeconds.toFixed(2) + "s" : "—",
-            date: dateStr
+            date: dateStr,
+            // Enough of the run to reconstruct its result page later. Lists are
+            // capped because this lives in localStorage, which a few large runs
+            // would otherwise fill; the caps are recorded so a truncated list is
+            // never shown as if it were the whole thing.
+            detail: {
+                source: appData.source === "qlik-cloud" ? "Qlik Cloud (exported)" : "Uploaded .qvf",
+                appName: appData.name,
+                fieldsCnt: appData.fieldsCnt,
+                visualsCnt: appData.visualsCnt,
+                tablesCnt: typeof appData.tablesCnt === "number" ? appData.tablesCnt : null,
+                projectDir: appData.projectDir,
+                engineRunId: appData.engineRunId || null,
+                artifactName: appData.artifactName || null,
+                columns: (appData.columns || []).slice(0, 200),
+                columnsTotal: (appData.columns || []).length,
+                sheets: (appData.sheets || []).slice(0, 50),
+                daxQueue: (appData.daxQueue || []).slice(0, 50),
+                gaps: appData.gaps || []
+            }
         });
 
-        localStorage.setItem("autogen_job_history", JSON.stringify(history));
+        // Old entries are dropped rather than letting the log grow without bound.
+        localStorage.setItem("autogen_job_history", JSON.stringify(history.slice(0, 40)));
         renderJobHistory();
+    }
+
+    // ---------- One run's result page ----------
+
+    function showHistoryList() {
+        const list = document.getElementById("history-list");
+        const detail = document.getElementById("history-detail");
+        if (list) list.classList.remove("hidden");
+        if (detail) detail.classList.add("hidden");
+    }
+
+    function showHistoryDetail(jobId) {
+        const list = document.getElementById("history-list");
+        const host = document.getElementById("history-detail");
+        if (!host) return;
+        const job = getJobHistory().find(h => h.id === jobId);
+        if (!job) return;
+
+        const d = job.detail;
+        const back = `<button type="button" class="btn-back-inline" id="btn-history-back">
+                <i class="fa-solid fa-arrow-left"></i> All runs
+            </button>`;
+
+        if (!d) {
+            // Recorded before results were kept. Saying so beats inventing them.
+            host.innerHTML = `${back}
+                <h2>${escapeHtml(job.file)}</h2>
+                <p class="tab-desc">Run <b>${escapeHtml(job.id)}</b> &middot; ${escapeHtml(job.date)} &middot; ${escapeHtml(job.time)}</p>
+                <div class="agent-empty-state">
+                    <i class="fa-solid fa-clock-rotate-left"></i>
+                    <h3>No detail was kept for this run</h3>
+                    <p>It finished before results were recorded with the history, so only the
+                       summary row above exists. A new run will keep its full result.</p>
+                </div>`;
+        } else {
+            const rows = (list, cols, empty) => list.length
+                ? list.map(cols).join("")
+                : `<tr><td colspan="6">${empty}</td></tr>`;
+
+            const truncated = d.columnsTotal > d.columns.length
+                ? `<p class="agent-section-note">Showing the first ${d.columns.length} of ${d.columnsTotal} fields recorded for this run.</p>`
+                : "";
+
+            host.innerHTML = `${back}
+                <h2>${escapeHtml(d.appName || job.file)}</h2>
+                <p class="tab-desc">Run <b>${escapeHtml(job.id)}</b> &middot; ${escapeHtml(d.source)} &middot;
+                    ${escapeHtml(job.date)} &middot; completed in ${escapeHtml(job.time)}</p>
+
+                <div class="kpi-row">
+                    ${kpiBox("Fields", escapeHtml(String(d.fieldsCnt || "Not reported")), d.tablesCnt !== null ? `${d.tablesCnt} table(s)` : "Table count not recorded")}
+                    ${kpiBox("Sheets / charts", escapeHtml(String(d.visualsCnt || "Not reported")), "As produced by the run")}
+                    ${kpiBox("Measures", `${d.daxQueue.length}`, d.daxQueue.length ? "Written into model.bim" : "None recorded")}
+                    ${kpiBox("Gaps", `${d.gaps.length}`, d.gaps.length ? "Not recovered from the source" : "None reported", d.gaps.length ? "warning-text" : "success-text")}
+                </div>
+
+                <div class="table-container">
+                    <h3>Report pages</h3>
+                    <table class="custom-table">
+                        <thead><tr><th>Page</th><th>Contents</th><th>Status</th></tr></thead>
+                        <tbody>${d.sheets.length
+                            ? d.sheets.map(s => `<tr><td><b>${escapeHtml(s.name)}</b></td><td>${escapeHtml(s.chartType)}</td><td><span class="status-badge success">${escapeHtml(s.status)}</span></td></tr>`).join("")
+                            : `<tr><td colspan="3">No report pages were recorded for this run.</td></tr>`}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="table-container">
+                    <h3>Measures</h3>
+                    <table class="custom-table">
+                        <thead><tr><th>Measure</th><th>DAX</th><th>Status</th></tr></thead>
+                        <tbody>${d.daxQueue.length
+                            ? d.daxQueue.map(q => `<tr><td>${escapeHtml(q.expr)}</td><td><code class="dax-code">${escapeHtml(q.dax)}</code></td><td><span class="status-badge success">${escapeHtml(q.status)}</span></td></tr>`).join("")
+                            : `<tr><td colspan="3">No measures were recorded for this run.</td></tr>`}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="table-container">
+                    <h3>Fields</h3>
+                    ${truncated}
+                    <div>${d.columns.length
+                        ? d.columns.map(c => `<span class="field-chip">${escapeHtml(c)}</span>`).join("")
+                        : `<span class="field-chip">No field names were recorded</span>`}</div>
+                </div>
+
+                ${d.gaps.length ? `
+                <div class="table-container">
+                    <h3>Not recovered from the source</h3>
+                    <table class="custom-table">
+                        <thead><tr><th>Missing</th></tr></thead>
+                        <tbody>${d.gaps.map(g => `<tr><td><span class="gap-pill">${escapeHtml(g)}</span></td></tr>`).join("")}</tbody>
+                    </table>
+                </div>` : ""}
+
+                ${d.engineRunId ? `
+                <div class="action-bar">
+                    <button class="btn-primary-block" id="btn-history-download" style="width: auto; padding: 12px 28px;">
+                        <i class="fa-solid fa-download"></i> Download this run's bundle
+                    </button>
+                    <p class="agent-section-note">Runs are held in memory by the engine, so this is only
+                       available until the server restarts.</p>
+                </div>` : ""}`;
+        }
+
+        if (list) list.classList.add("hidden");
+        host.classList.remove("hidden");
+
+        const backBtn = document.getElementById("btn-history-back");
+        if (backBtn) backBtn.addEventListener("click", showHistoryList);
+
+        const dl = document.getElementById("btn-history-download");
+        if (dl && d && d.engineRunId) {
+            dl.addEventListener("click", () => {
+                const link = document.createElement("a");
+                link.href = `/api/runs/${d.engineRunId}/download`;
+                link.download = d.artifactName || `${d.appName || job.file}.zip`;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+            });
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -3569,4 +3721,8 @@ ${(appData.gaps && appData.gaps.length)
     // 9. INITIALIZE UI WITH NO FILE SELECTED BY DEFAULT
     // ----------------------------------------------------------------------
     refreshAllTabsForActiveQvf(null);
+    // Past runs do not depend on anything being loaded now, and the refresh above
+    // returns early when no file is active — so without this the history tab read
+    // as empty on a fresh load even when localStorage held completed runs.
+    renderJobHistory();
 });

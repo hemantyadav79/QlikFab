@@ -2220,3 +2220,18 @@ html[data-theme="dark"] .theme-toggle__thumb {
 @media (max-width: 760px) {
     .mode-grid { grid-template-columns: 1fr; }
 }
+
+/* Migration history rows open that run's result page. */
+.history-row {
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
+}
+
+.history-row:hover {
+    background-color: var(--accent-soft);
+}
+
+.history-row:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}

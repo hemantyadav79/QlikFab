@@ -25,7 +25,7 @@
         })();
     </script>
 
-    <link rel="stylesheet" href="styles.css?v=20260805_server_export_v1">
+    <link rel="stylesheet" href="styles.css?v=20260806_history_init_v1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -654,28 +654,36 @@
                 <h2>Autonomous Migration Job History</h2>
                 <p class="tab-desc">Audit trail of migration engine runs</p>
                 
-                <div class="table-container">
-                    <table class="custom-table">
-                        <thead>
-                            <tr>
-                                <th>Job ID</th>
-                                <th>Target File</th>
-                                <th>Sheets</th>
-                                <th>Visuals</th>
-                                <th>Execution Time</th>
-                                <th>Date & Time</th>
-                            </tr>
-                        </thead>
-                        <tbody id="history-tbody">
-                            <!-- Dynamic history injected by script.js -->
-                        </tbody>
-                    </table>
+                <!-- The list and one run's detail are the two states of this tab;
+                     only ever one is shown. -->
+                <div id="history-list">
+                    <div class="table-container">
+                        <table class="custom-table">
+                            <thead>
+                                <tr>
+                                    <th>Job ID</th>
+                                    <th>Target File</th>
+                                    <th>Sheets</th>
+                                    <th>Visuals</th>
+                                    <th>Execution Time</th>
+                                    <th>Date &amp; Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-tbody">
+                                <!-- Dynamic history injected by script.js -->
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
+
+                <!-- Rendered from what was recorded with that run. Runs finished
+                     before this existed have no detail and say so. -->
+                <div id="history-detail" class="hidden"></div>
             </section>
 
         </main>
     </div>
 
-    <script src="script.js?v=20260805_server_export_v1"></script>
+    <script src="script.js?v=20260806_history_init_v1"></script>
 </body>
 </html>
