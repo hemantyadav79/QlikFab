@@ -454,7 +454,9 @@ h1, h2, h3, h4 {
     margin-left: 260px;
     flex-grow: 1;
     padding: 32px 48px;
-    max-width: 1380px;
+    max-width: 100%;
+    width: calc(100% - 260px);
+    box-sizing: border-box;
 }
 
 /* --------------------------------------------------------------------------
@@ -1380,9 +1382,11 @@ html[data-theme="dark"] .theme-toggle__thumb {
    ====================================================================== */
 .autogen-4agents-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px;
     margin-bottom: 20px;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 @media (max-width: 900px) {
@@ -1401,6 +1405,10 @@ html[data-theme="dark"] .theme-toggle__thumb {
     gap: 10px;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
     transition: all 0.3s ease;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
 }
 
 .agent-live-box:hover {
@@ -1414,12 +1422,17 @@ html[data-theme="dark"] .theme-toggle__thumb {
     justify-content: space-between;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     padding-bottom: 8px;
+    gap: 8px;
+    min-width: 0;
 }
 
 .agent-live-identity {
     display: flex;
     align-items: center;
     gap: 10px;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
 }
 
 .agent-live-avatar {
@@ -1432,6 +1445,12 @@ html[data-theme="dark"] .theme-toggle__thumb {
     font-size: 15px;
     color: #fff;
     box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    flex-shrink: 0;
+}
+
+.agent-live-names {
+    min-width: 0;
+    overflow: hidden;
 }
 
 .agent-live-names h4 {
@@ -1439,11 +1458,18 @@ html[data-theme="dark"] .theme-toggle__thumb {
     font-size: 14px;
     font-weight: 700;
     color: var(--text-strong);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .agent-live-names span {
     font-size: 11px;
     color: var(--text-sub);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
 }
 
 .agent-badge-tag {
@@ -1455,6 +1481,8 @@ html[data-theme="dark"] .theme-toggle__thumb {
     font-weight: 700;
     letter-spacing: 0.5px;
     text-transform: uppercase;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .agent-badge-tag.running {
@@ -1472,17 +1500,20 @@ html[data-theme="dark"] .theme-toggle__thumb {
 
 .agent-live-logs {
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 11.5px;
     color: #a0aec0;
     display: flex;
     flex-direction: column;
     gap: 6px;
     height: 110px;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 8px;
     background: rgba(0, 0, 0, 0.3);
     border-radius: 6px;
     border: 1px solid rgba(255, 255, 255, 0.04);
+    word-break: break-all;
+    overflow-wrap: anywhere;
 }
 
 .console-metrics {
@@ -2238,8 +2269,8 @@ html[data-theme="dark"] .theme-toggle__thumb {
 
 /* One path at a time, so the chosen card gets the full width. */
 .migration-grid.single {
-    grid-template-columns: minmax(0, 720px);
-    justify-content: center;
+    grid-template-columns: 1fr;
+    width: 100%;
 }
 
 .form-section-title {
