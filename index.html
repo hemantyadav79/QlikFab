@@ -28,8 +28,7 @@
     <link rel="stylesheet" href="styles.css?v=5">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
@@ -45,7 +44,7 @@
             </div>
             <div class="nav-section-title">Navigate</div>
             <nav class="nav-menu">
-                <a href="#run-migration" class="nav-item active" data-tab="tab-run"><i class="fa-solid fa-rocket"></i> Run migration</a>
+                <a href="#run-migration" class="nav-item active" data-tab="tab-run">Run migration</a>
 
                 <!--
                   Agents is a group, not a leaf: opening it reveals one sub-item per
@@ -54,7 +53,6 @@
                 <div class="nav-group" id="nav-group-agents">
                     <a href="#agents" class="nav-item nav-item-parent" data-tab="tab-agents"
                        aria-expanded="false" aria-controls="nav-submenu-agents">
-                        <i class="fa-solid fa-robot"></i>
                         <span class="nav-item-label">Agents</span>
                         <i class="fa-solid fa-chevron-down nav-caret" aria-hidden="true"></i>
                     </a>
@@ -82,18 +80,9 @@
                     </div>
                 </div>
 
-                <a href="#artifacts" class="nav-item" data-tab="tab-artifacts"><i class="fa-solid fa-box-open"></i> Artifacts</a>
-                <a href="#job-history" class="nav-item" data-tab="tab-history"><i class="fa-solid fa-clock-rotate-left"></i> Migration history</a>
+                <a href="#artifacts" class="nav-item" data-tab="tab-artifacts">Artifacts</a>
+                <a href="#job-history" class="nav-item" data-tab="tab-history">Migration history</a>
             </nav>
-            <div class="sidebar-footer">
-                <div class="autogen-badge">
-                    <div class="badge-icon"><i class="fa-solid fa-robot"></i></div>
-                    <div class="badge-content">
-                        <div class="badge-title">Migration engine</div>
-                        <div class="badge-desc">cli/ai_qvf_to_powerbi.py</div>
-                    </div>
-                </div>
-            </div>
         </aside>
 
         <!-- MAIN CONTENT AREA -->
