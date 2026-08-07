@@ -38,6 +38,29 @@ ENGINE_SCRIPT = os.path.join(CLI_DIR, "ai_qvf_to_powerbi.py")
 # A .qvf is a binary Qlik app; the largest bundled sample is ~2 MB, so this is
 # generous while still refusing anything absurd.
 MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+
+# Disk guards. An export materialises the whole .qvf locally, so a run on a
+# nearly-full volume used to fail as a bare "[Errno 28] No space left on
+# device" partway through — after having consumed whatever was left.
+#
+# `MIN_FREE_BYTES` is the headroom a run must find before it is allowed to
+# start; `RESERVE_FREE_BYTES` is the floor a download refuses to cross, so a
+# large app cannot take the machine down with it.
+# Both are overridable, in MB, for a machine where the defaults are wrong:
+#   QLIKFAB_MIN_FREE_MB=500 python dev_server.py
+def _mb_env(name, default_mb):
+    try:
+        return max(0, int(os.environ.get(name, ""))) * 1024 * 1024
+    except ValueError:
+        return default_mb * 1024 * 1024
+
+
+MIN_FREE_BYTES = _mb_env("QLIKFAB_MIN_FREE_MB", 2048)      # 2 GB to begin
+RESERVE_FREE_BYTES = _mb_env("QLIKFAB_RESERVE_MB", 512)    # never eat the last 512 MB
+FREE_SPACE_CHECK_EVERY_BYTES = 16 * 1024 * 1024
+# Work dirs left by an earlier server process are unreachable — the run store
+# is in memory — so anything this old is garbage rather than someone's run.
+ORPHAN_SWEEP_AGE_SECONDS = 6 * 3600
 # The engine is CPU-bound parsing, not network-bound. A run that has not
 # finished by this point is wedged and is killed rather than left behind.
 RUN_TIMEOUT_SECONDS = 900
@@ -61,6 +84,77 @@ PHASE_MARKERS = [
     ("report", re.compile(r"page\.json|visual\.json|Generated Report Page|definition\.pbir", re.I)),
     ("package", re.compile(r"\.pbit|MIGRATION_AUDIT_REPORT|_PBIP\.zip|PROJECT READY", re.I)),
 ]
+
+
+def human_bytes(count):
+    if count >= 1024 ** 3:
+        return "%.1f GB" % (count / float(1024 ** 3))
+    return "%.0f MB" % (count / 1048576.0)
+
+
+def require_free_space(path, needed, note=None):
+    """Refuses to start work that the volume cannot hold.
+
+    Checked up front because the alternative is discovering it partway through
+    a multi-hundred-megabyte download, having already consumed the remainder.
+    """
+    try:
+        free = shutil.disk_usage(path).free
+    except OSError:
+        return          # Undeterminable: let the write itself report the truth.
+    if free >= needed:
+        return
+    raise RuntimeError(
+        "Not enough disk space to run the migration.\n\n"
+        "%s needs about %s free and the volume holding %s has %s.\n\n"
+        "Free space there, or point TMPDIR/TEMP at a volume with room."
+        % ("A migration run", human_bytes(needed), path, human_bytes(free))
+    )
+
+
+def sweep_orphaned_work_dirs(note=None):
+    """Deletes work dirs abandoned by earlier server processes.
+
+    Runs are tracked in memory, so a dir from a previous process can never be
+    reached again — it is garbage that would otherwise accumulate forever. Only
+    dirs older than ORPHAN_SWEEP_AGE_SECONDS are touched, so a run belonging to
+    another server started moments ago is left alone.
+    """
+    root = tempfile.gettempdir()
+    cutoff = time.time() - ORPHAN_SWEEP_AGE_SECONDS
+    removed = freed = 0
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        return 0, 0
+
+    for entry in entries:
+        if not entry.startswith("qlikmig_"):
+            continue
+        path = os.path.join(root, entry)
+        if not os.path.isdir(path):
+            continue
+        try:
+            if os.path.getmtime(path) > cutoff:
+                continue
+            size = 0
+            for walk_root, _dirs, files in os.walk(path):
+                for name in files:
+                    try:
+                        size += os.path.getsize(os.path.join(walk_root, name))
+                    except OSError:
+                        pass
+            shutil.rmtree(path, ignore_errors=True)
+            if not os.path.exists(path):
+                removed += 1
+                freed += size
+        except OSError:
+            continue
+
+    if removed and note:
+        note("[cleanup] Removed %d abandoned work dir(s), freeing %s."
+             % (removed, human_bytes(freed)))
+    return removed, freed
 
 
 def classify(line):
@@ -162,6 +256,11 @@ class MigrationRun:
 
     # ---------- execution ----------
 
+    def preflight(self):
+        """Raises if the volume cannot hold this run. Called before anything is
+        written, so a full disk is reported instead of half-consumed."""
+        require_free_space(self.work_dir, MIN_FREE_BYTES, self.note)
+
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
 
@@ -182,6 +281,7 @@ class MigrationRun:
     def _export_then_run(self, tenant, app_id, authorization):
         self.status = "exporting"
         try:
+            self.preflight()
             size = download_qlik_app(tenant, app_id, authorization, self.input_path, self.note)
         except Exception as err:      # noqa: BLE001 - reported to the UI verbatim
             self.status = "failed"
@@ -257,6 +357,21 @@ class MigrationRun:
             self.status = "failed"
             self.error = "The engine exited with code %s." % process.returncode
             self.note("[runner] %s" % self.error)
+
+        # The engine has finished reading the source, and it is by far the
+        # largest thing in the work dir. The outputs stay — they are what gets
+        # downloaded and published — but the .qvf has no further use.
+        self._drop_source_file()
+
+    def _drop_source_file(self):
+        try:
+            if self.input_path and os.path.exists(self.input_path):
+                freed = os.path.getsize(self.input_path)
+                os.remove(self.input_path)
+                self.note("[cleanup] Released the source .qvf (%s)." % human_bytes(freed))
+        except OSError as err:
+            # Not worth failing a finished run over; the dir is swept later.
+            self.note("[cleanup] Could not release the source .qvf: %s" % err)
 
     def _find_artifact(self):
         """The PBIP zip the engine wrote, or None. Never fabricated."""
@@ -417,7 +532,11 @@ def download_qlik_app(tenant, app_id, authorization, dest_path, note):
     download_url = location if location.lower().startswith("http") else base + location
     note("[export] Downloading the .qvf from the tenant…")
 
+    # Refuse to start rather than discover halfway down that there is no room.
+    require_free_space(os.path.dirname(dest_path), MIN_FREE_BYTES, note)
+
     written = 0
+    checked_at = 0
     try:
         with urllib.request.urlopen(
             _qlik_request(download_url, authorization), timeout=EXPORT_TIMEOUT_SECONDS
@@ -428,6 +547,22 @@ def download_qlik_app(tenant, app_id, authorization, dest_path, note):
                     break
                 handle.write(chunk)
                 written += len(chunk)
+
+                # A download that runs the volume down to zero takes the whole
+                # machine with it, not just this run. Stop while the disk is
+                # still usable and say so.
+                if written - checked_at >= FREE_SPACE_CHECK_EVERY_BYTES:
+                    checked_at = written
+                    free = shutil.disk_usage(os.path.dirname(dest_path)).free
+                    if free < RESERVE_FREE_BYTES:
+                        raise RuntimeError(
+                            "Stopped the download to keep the disk usable.\n\n"
+                            "%.1f MB had been written and only %.0f MB of free space was left on "
+                            "the volume holding %s.\n\n"
+                            "Free space there, or point TMPDIR/TEMP at a volume with room, then "
+                            "run the migration again."
+                            % (written / 1048576.0, free / 1048576.0, os.path.dirname(dest_path))
+                        )
     except urllib.error.HTTPError as err:
         raise RuntimeError(_describe_http_error(err, "Downloading the exported app"))
     except urllib.error.URLError as err:
