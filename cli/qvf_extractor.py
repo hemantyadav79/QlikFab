@@ -67,6 +67,10 @@ class QVFExtractor:
         self.tables: list = []
         self.base64_metadata: list = []
         self.all_objects: list = []  # All decompressed JSON objects
+        # Library dimensions/measures, keyed by qId, that charts reference by
+        # qLibraryId rather than defining inline.
+        self.master_dimensions: dict = {}
+        self.master_measures: dict = {}
         self._zlib_streams: list = []
 
     # ----------------------------------------------------------
@@ -167,6 +171,14 @@ class QVFExtractor:
             # Store the raw object
             self.all_objects.append({'offset': offset, 'data': obj})
 
+        # Master dimensions and measures are resolved before any sheet is
+        # parsed: a chart references them by qLibraryId, and the streams arrive
+        # in no particular order, so a sheet parsed first would find nothing.
+        self._collect_master_items()
+
+        for entry in self.all_objects:
+            obj = entry['data']
+
             # Classify based on known keys
             if 'qScript' in obj:
                 self._parse_script(obj)
@@ -184,6 +196,44 @@ class QVFExtractor:
     # ----------------------------------------------------------
     # STEP 5: Parse individual components
     # ----------------------------------------------------------
+    def _collect_master_items(self):
+        """
+        Index the app's master dimensions and measures by their library id.
+
+        Qlik charts rarely inline their fields. A dimension or measure defined
+        once in the library is referenced from every chart that uses it via
+        `qLibraryId`, leaving the chart's own `qDef` empty. Without this index
+        those charts look like they have no dimensions and no measures at all.
+        """
+        for entry in self.all_objects:
+            obj = entry['data']
+            info = obj.get('qInfo') or {}
+            qid = info.get('qId')
+            if not qid:
+                continue
+
+            if info.get('qType') == 'dimension' and 'qDim' in obj:
+                dim = obj['qDim'] or {}
+                field_defs = dim.get('qFieldDefs') or []
+                labels = dim.get('qFieldLabels') or []
+                self.master_dimensions[qid] = {
+                    'fields': list(field_defs),
+                    'field': field_defs[0] if field_defs else '',
+                    'label': (labels[0] if labels else '') or dim.get('title', ''),
+                    'title': (obj.get('qMetaDef') or {}).get('title', ''),
+                }
+            elif info.get('qType') == 'measure' and 'qMeasure' in obj:
+                meas = obj['qMeasure'] or {}
+                self.master_measures[qid] = {
+                    'expression': meas.get('qDef', ''),
+                    'label': meas.get('qLabel', '') or (obj.get('qMetaDef') or {}).get('title', ''),
+                    'format': meas.get('qNumFormat', {}),
+                }
+
+        if self.master_dimensions or self.master_measures:
+            print("  [OK] Indexed %d master dimension(s) and %d master measure(s)"
+                  % (len(self.master_dimensions), len(self.master_measures)))
+
     def _parse_script(self, obj: dict):
         """Extract the Qlik load script."""
         raw_script = obj.get('qScript', '')
@@ -249,22 +299,54 @@ class QVFExtractor:
             'settings': {},
         }
 
-        # Extract dimensions
+        # Extract dimensions, resolving library references against the master
+        # items indexed earlier. An inline definition always wins over the
+        # library entry, because a chart may override what it borrowed.
         for dim in hypercube.get('qDimensions', []):
-            dim_def = dim.get('qDef', {})
+            dim_def = dim.get('qDef', {}) or {}
+            master = self.master_dimensions.get(dim.get('qLibraryId'), {})
+            field_defs = dim_def.get('qFieldDefs') or []
+            labels = dim_def.get('qFieldLabels') or []
             chart['dimensions'].append({
-                'field': dim_def.get('qFieldDefs', [''])[0] if dim_def.get('qFieldDefs') else '',
-                'label': dim_def.get('qFieldLabels', [''])[0] if dim_def.get('qFieldLabels') else '',
+                'field': (field_defs[0] if field_defs else '') or master.get('field', ''),
+                'label': (labels[0] if labels else '') or master.get('label', ''),
                 'sort': dim_def.get('qSortCriterias', []),
+                'fromLibrary': bool(master and not field_defs),
             })
 
-        # Extract measures
+        # A listbox is a single-field selector and keeps its field in
+        # qListObjectDef rather than in a hypercube. Without this it looks like
+        # an object with no dimensions and cannot become a slicer.
+        list_object = prop.get('qListObjectDef')
+        if list_object and not chart['dimensions']:
+            list_def = list_object.get('qDef', {}) or {}
+            master = self.master_dimensions.get(list_object.get('qLibraryId'), {})
+            field_defs = list_def.get('qFieldDefs') or []
+            labels = list_def.get('qFieldLabels') or []
+            field = (field_defs[0] if field_defs else '') or master.get('field', '')
+            label = ((labels[0] if labels else '')
+                     or list_def.get('qLabel', '')
+                     or master.get('label', ''))
+            # Older listboxes name the field only in the object's title.
+            if not field:
+                field = label or (prop.get('title') if isinstance(prop.get('title'), str) else '')
+            if field:
+                chart['dimensions'].append({
+                    'field': field,
+                    'label': label or field,
+                    'sort': list_def.get('qSortCriterias', []),
+                    'fromLibrary': bool(master and not field_defs),
+                })
+
+        # Extract measures, same precedence.
         for meas in hypercube.get('qMeasures', []):
-            meas_def = meas.get('qDef', {})
+            meas_def = meas.get('qDef', {}) or {}
+            master = self.master_measures.get(meas.get('qLibraryId'), {})
             chart['measures'].append({
-                'expression': meas_def.get('qDef', ''),
-                'label': meas_def.get('qLabel', ''),
-                'format': meas_def.get('qNumFormat', {}),
+                'expression': meas_def.get('qDef', '') or master.get('expression', ''),
+                'label': meas_def.get('qLabel', '') or master.get('label', ''),
+                'format': meas_def.get('qNumFormat', {}) or master.get('format', {}),
+                'fromLibrary': bool(master and not meas_def.get('qDef')),
             })
 
         # Extract chart-specific settings
