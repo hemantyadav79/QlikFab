@@ -273,6 +273,69 @@
                         Migrate to Microsoft Fabric
                     </button>
                 </div>
+
+                <!--
+                  Run progress. Stays on this tab so starting a migration does not
+                  throw the user somewhere else; the Logs tab holds the detail for
+                  whoever wants it. One row per phase, in the order the engine runs
+                  them. Progress is per-app-completed, not a timer — a bar that
+                  advances on a clock would claim work that has not happened.
+                -->
+                <div class="run-progress hidden" id="run-progress">
+                    <div class="run-progress-head">
+                        <h3><i class="fa-solid fa-gauge-high"></i> Migration progress</h3>
+                        <div class="run-progress-meta">
+                            <span id="run-progress-count">0 of 0 apps</span>
+                            <a href="#logs" class="btn-link" id="btn-goto-logs">View full logs</a>
+                        </div>
+                    </div>
+
+                    <div class="phase-bars" id="phase-bars">
+                        <div class="phase-bar" data-phase="assess">
+                            <div class="phase-bar-top">
+                                <span class="phase-bar-dot" style="background: #3b82f6;"></span>
+                                <span class="phase-bar-name">Assessment</span>
+                                <span class="phase-bar-state" id="progress-state-assess">Waiting</span>
+                            </div>
+                            <div class="phase-bar-track"><div class="phase-bar-fill" id="progress-fill-assess" style="background: #3b82f6;"></div></div>
+                            <p class="phase-bar-note" id="progress-note-assess">Reads the .qvf binary: load script, schema &amp; sheets</p>
+                        </div>
+
+                        <div class="phase-bar" data-phase="parse">
+                            <div class="phase-bar-top">
+                                <span class="phase-bar-dot" style="background: #06b6d4;"></span>
+                                <span class="phase-bar-name">Parsing</span>
+                                <span class="phase-bar-state" id="progress-state-parse">Waiting</span>
+                            </div>
+                            <div class="phase-bar-track"><div class="phase-bar-fill" id="progress-fill-parse" style="background: #06b6d4;"></div></div>
+                            <p class="phase-bar-note" id="progress-note-parse">Builds model.bim — tables, columns &amp; DAX measures</p>
+                        </div>
+
+                        <div class="phase-bar" data-phase="map">
+                            <div class="phase-bar-top">
+                                <span class="phase-bar-dot" style="background: #8b5cf6;"></span>
+                                <span class="phase-bar-name">Mapping</span>
+                                <span class="phase-bar-state" id="progress-state-map">Waiting</span>
+                            </div>
+                            <div class="phase-bar-track"><div class="phase-bar-fill" id="progress-fill-map" style="background: #8b5cf6;"></div></div>
+                            <p class="phase-bar-note" id="progress-note-map">Lays out report pages &amp; visuals</p>
+                        </div>
+
+                        <div class="phase-bar" data-phase="gen">
+                            <div class="phase-bar-top">
+                                <span class="phase-bar-dot" style="background: #10b981;"></span>
+                                <span class="phase-bar-name">Report Generation</span>
+                                <span class="phase-bar-state" id="progress-state-gen">Waiting</span>
+                            </div>
+                            <div class="phase-bar-track"><div class="phase-bar-fill" id="progress-fill-gen" style="background: #10b981;"></div></div>
+                            <p class="phase-bar-note" id="progress-note-gen">Writes .pbit, audit report &amp; PBIP bundle</p>
+                        </div>
+                    </div>
+
+                    <!-- The most recent line, so the panel shows life without
+                         reproducing the whole stream. -->
+                    <div class="run-progress-tail" id="run-progress-tail"></div>
+                </div>
             </section>
 
             <!--
@@ -293,6 +356,9 @@
                         <button type="button" class="log-filter" data-phase="parse">Parsing</button>
                         <button type="button" class="log-filter" data-phase="map">Mapping</button>
                         <button type="button" class="log-filter" data-phase="gen">Report Generation</button>
+                        <button type="button" class="log-filter log-filter-errors" data-phase="errors">
+                            <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> Failures
+                        </button>
                     </div>
                     <div class="logs-toolbar-actions">
                         <span class="console-status" id="console-status-badge">IDLE</span>

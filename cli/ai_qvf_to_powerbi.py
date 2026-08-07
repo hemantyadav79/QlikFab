@@ -53,22 +53,65 @@ class AIConverterBrain:
     Tier 4: Deterministic fallback rule
     """
 
+    # The tier chain, in the order it is attempted. `provider` promotes one of
+    # these to the front; the rest still follow as fallbacks.
+    TIER_ORDER = ("groq", "gemini", "ollama")
+
     def __init__(
         self,
+        provider="groq",
+        model=None,
+        api_key=None,
         groq_key=None,
         gemini_key=None,
         groq_model="llama-3.3-70b-versatile",
         gemini_model="gemini-2.0-flash",
+        ollama_model="llama3.2",
         ollama_url="http://localhost:11434/api/generate"
     ):
-        self.groq_key = groq_key or os.environ.get("GROQ_API_KEY", DEFAULT_GROQ_KEY)
-        self.gemini_key = gemini_key or os.environ.get("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
+        # `provider`, `model` and `api_key` are the CLI's vocabulary and are kept
+        # so --provider/--model/--api-key mean something. They select and
+        # configure the first tier; the remaining tiers stay as fallbacks.
+        self.provider = (provider or "groq").strip().lower()
+        if self.provider not in self.TIER_ORDER:
+            self.provider = "groq"
+
         self.groq_model = groq_model
         self.gemini_model = gemini_model
+        self.ollama_model = ollama_model
+        # A model name only ever describes the provider it was given with.
+        if model:
+            setattr(self, "%s_model" % self.provider, model)
+
+        # Likewise a bare --api-key belongs to the chosen provider, not to all.
+        if api_key:
+            if self.provider == "gemini":
+                gemini_key = gemini_key or api_key
+            elif self.provider == "groq":
+                groq_key = groq_key or api_key
+
+        self.groq_key = groq_key or os.environ.get("GROQ_API_KEY", DEFAULT_GROQ_KEY)
+        self.gemini_key = gemini_key or os.environ.get("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
         self.ollama_url = ollama_url
         self.cache = {}
         # Qlik expressions that could not be translated with confidence.
         self.unresolved = []
+
+    @property
+    def model(self):
+        """The model of the provider that will be tried first."""
+        return getattr(self, "%s_model" % self.provider, self.groq_model)
+
+    @property
+    def tier_chain(self):
+        """The chosen provider first, then the others as written fallbacks."""
+        return (self.provider,) + tuple(t for t in self.TIER_ORDER if t != self.provider)
+
+    @property
+    def is_available(self):
+        """True when at least one tier has something to call. Ollama is local and
+        may or may not be up, so only a configured cloud key counts as known."""
+        return bool(self.groq_key or self.gemini_key)
 
     # Qlik aggregation -> (DAX function, measure-name suffix)
     AGGREGATIONS = {
@@ -189,29 +232,28 @@ class AIConverterBrain:
 
         res = None
 
-        # TIER 1: Groq Cloud API
-        if self.groq_key and not self.groq_key.startswith("EXHAUSTED"):
-            try:
-                print(f"  [AI Tier 1] Asking Groq API ({self.groq_model}) for '{qlik_expr}'...")
-                res = self._call_groq_json(prompt)
-            except Exception as err_groq:
-                print(f"  [AI Fallback] Groq out of tokens or error ({err_groq}). Shifting seamlessly to Gemini API...")
+        # Each tier is tried in turn until one answers. The chosen provider leads;
+        # a tier with no key configured is skipped rather than failed, so its
+        # error never masks the one that actually mattered.
+        for position, tier in enumerate(self.tier_chain, start=1):
+            if res:
+                break
+            if tier == "groq":
+                if not self.groq_key or self.groq_key.startswith("EXHAUSTED"):
+                    continue
+                label, call = f"Groq API ({self.groq_model})", self._call_groq_json
+            elif tier == "gemini":
+                if not self.gemini_key:
+                    continue
+                label, call = f"Gemini API ({self.gemini_model})", self._call_gemini_json
+            else:
+                label, call = f"local Ollama ({self.ollama_model})", self._call_ollama_json
 
-        # TIER 2: Fallback to Gemini Cloud API (if Groq fails or out of tokens)
-        if not res and self.gemini_key:
             try:
-                print(f"  [AI Tier 2] Asking Gemini API ({self.gemini_model}) for '{qlik_expr}'...")
-                res = self._call_gemini_json(prompt)
-            except Exception as err_gemini:
-                print(f"  [AI Fallback] Gemini API error ({err_gemini}). Shifting to local Ollama...")
-
-        # TIER 3: Fallback to local Ollama (if Groq & Gemini both fail)
-        if not res:
-            try:
-                print(f"  [AI Tier 3] Asking local Ollama for '{qlik_expr}'...")
-                res = self._call_ollama_json(prompt)
-            except Exception:
-                pass
+                print(f"  [AI Tier {position}] Asking {label} for '{qlik_expr}'...")
+                res = call(prompt)
+            except Exception as err:
+                print(f"  [AI Fallback] {label} failed ({err}).")
 
         if res and "measure_name" in res and "dax_expression" in res:
             dax = res["dax_expression"].strip()
@@ -767,7 +809,8 @@ class UniversalPBIPGenerator:
         print(f"\n{'='*60}")
         print(f"  AI UNIVERSAL POWER BI GENERATOR — {self.project_name}")
         print(f"  AI Brain Provider : {self.ai.provider.upper()} ({self.ai.model})")
-        print(f"  Ollama Available  : {'YES (Dynamic AI Translation)' if self.ai.is_available else 'NO (Using Rule-Based Fallback)'}")
+        print(f"  Fallback Chain    : {' -> '.join(t.upper() for t in self.ai.tier_chain)}")
+        print(f"  Cloud Key Present : {'YES (Dynamic AI Translation)' if self.ai.is_available else 'NO (Using Rule-Based Fallback)'}")
         print(f"{'='*60}\n")
 
         self._create_directories()

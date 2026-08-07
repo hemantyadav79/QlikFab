@@ -1523,6 +1523,36 @@ html[data-theme="dark"] .theme-toggle__thumb {
     background-color: var(--bg-overlay);
 }
 
+/* A failed line has to be findable by scanning, so it carries the colour on the
+   whole row — text, stamp and a left edge — not just one token. */
+.log-line.is-error {
+    color: var(--danger);
+    background-color: var(--danger-soft);
+    border-left: 3px solid var(--danger);
+    padding-left: 9px;
+}
+
+.log-line.is-error .log-time,
+.log-line.is-error .log-text {
+    color: var(--danger);
+}
+
+.log-line.is-error .log-phase {
+    color: var(--danger);
+}
+
+.log-line.is-warn {
+    color: var(--warning);
+    background-color: var(--warning-soft);
+    border-left: 3px solid var(--warning);
+    padding-left: 9px;
+}
+
+.log-line.is-warn .log-time,
+.log-line.is-warn .log-text {
+    color: inherit;
+}
+
 /* Timestamp prefix inside each console line */
 .log-time {
     color: var(--accent);
@@ -1596,6 +1626,23 @@ html[data-theme="dark"] .theme-toggle__thumb {
     background: var(--accent-soft);
     border-color: var(--accent);
     color: var(--accent);
+}
+
+/* The failures chip keeps the danger colour whether or not it is the active one,
+   so it reads as the thing to reach for when a run has gone wrong. */
+.log-filter-errors {
+    color: var(--danger);
+}
+
+.log-filter-errors:hover {
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.log-filter-errors.active {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    color: var(--danger);
 }
 
 .log-filter:focus-visible {
@@ -2523,6 +2570,150 @@ html[data-theme="dark"] .theme-toggle__thumb {
     flex-direction: column;
     gap: 14px;
     margin-bottom: 20px;
+}
+
+/* ---------- Run progress (stays on the Run migration tab) ---------- */
+
+.run-progress {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+.run-progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.run-progress-head h3 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-strong);
+}
+
+.run-progress-head h3 i {
+    color: var(--accent);
+    margin-right: 8px;
+}
+
+.run-progress-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+/* Four abreast on a wide screen, stacking down to one on a phone. */
+.phase-bars {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 18px;
+}
+
+.phase-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.phase-bar-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.phase-bar-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.phase-bar-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-strong);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.phase-bar-state {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.phase-bar-state.running { color: var(--info); }
+.phase-bar-state.completed { color: var(--success); }
+.phase-bar-state.failed { color: var(--danger); }
+
+.phase-bar-track {
+    height: 7px;
+    border-radius: 999px;
+    background-color: var(--bg-inset);
+    border: 1px solid var(--border);
+    overflow: hidden;
+}
+
+.phase-bar-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    transition: width 420ms ease;
+}
+
+/* A phase that is working but has completed no app yet still has to look alive,
+   so an indeterminate sliver animates rather than sitting at zero. */
+.phase-bar.is-running .phase-bar-fill.indeterminate {
+    width: 35% !important;
+    animation: phase-scan 1.25s ease-in-out infinite;
+}
+
+@keyframes phase-scan {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(285%); }
+}
+
+.phase-bar.is-failed .phase-bar-fill {
+    background: var(--danger) !important;
+}
+
+.phase-bar-note {
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+/* The latest engine line, so the panel shows movement without duplicating the
+   Logs tab. */
+.run-progress-tail {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-sub);
+    min-height: 18px;
+    word-break: break-word;
+}
+
+.run-progress-tail.is-error {
+    color: var(--danger);
 }
 
 /* Inline result of a connection attempt — reported in the card that owns the

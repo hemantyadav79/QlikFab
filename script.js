@@ -1825,6 +1825,11 @@ ${(appData.gaps && appData.gaps.length)
         clearConnStatus("run-status");
 
         if (!appData) {
+            // Only a true reset clears the panel. A refresh that still has apps
+            // loaded happens at the end of a run too, and must not wipe the bars
+            // the user just watched fill.
+            const progressPanel = document.getElementById("run-progress");
+            if (progressPanel) progressPanel.classList.add("hidden");
             renderAgentDetailTabs();
             return;
         }
@@ -2281,6 +2286,18 @@ ${(appData.gaps && appData.gaps.length)
 
     let activeLogPhase = "all";
 
+    // A failure has to be findable in a long stream without reading every line.
+    // Matched against the rendered text rather than the markup, so escaping can
+    // never hide a marker.
+    const LOG_ERROR_RE = /\[(FAILED|ERROR|FATAL|CRITICAL)\]|\bTraceback\b|\bErrno\s+\d+|\bException\b/i;
+    const LOG_WARN_RE = /\[(WARN|WARNING|GAP|SKIPPED|PARTIAL)\]/i;
+
+    function logSeverity(text) {
+        if (LOG_ERROR_RE.test(text)) return "is-error";
+        if (LOG_WARN_RE.test(text)) return "is-warn";
+        return "";
+    }
+
     // Appends one line to the unified stream. The phase rides on the row so the
     // chips can filter without the text being re-rendered.
     function appendUnifiedLog(phaseId, timeSec, msgHtml) {
@@ -2292,9 +2309,11 @@ ${(appData.gaps && appData.gaps.length)
             `<span class="log-time">[+${timeSec}s]</span>` +
             `<span class="log-phase phase-${phaseId}">${LOG_PHASE_LABEL[phaseId] || phaseId}</span>` +
             `<span class="log-text">${msgHtml}</span>`;
-        if (activeLogPhase !== "all" && activeLogPhase !== phaseId) {
-            row.classList.add("filtered-out");
-        }
+
+        const severity = logSeverity(row.querySelector(".log-text").textContent);
+        if (severity) row.classList.add(severity);
+
+        if (!logRowMatchesFilter(row, activeLogPhase)) row.classList.add("filtered-out");
         consoleBody.appendChild(row);
         consoleBody.scrollTop = consoleBody.scrollHeight;
         setLogsEmptyState();
@@ -2315,6 +2334,14 @@ ${(appData.gaps && appData.gaps.length)
         if (filterEmpty) filterEmpty.classList.toggle("hidden", total === 0 || shown > 0);
     }
 
+    // "errors" is not a phase — it cuts across all four, which is the view wanted
+    // when a run has failed and the question is only what went wrong.
+    function logRowMatchesFilter(row, phase) {
+        if (phase === "all") return true;
+        if (phase === "errors") return row.classList.contains("is-error") || row.classList.contains("is-warn");
+        return row.dataset.phase === phase;
+    }
+
     function applyLogFilter(phase) {
         activeLogPhase = phase;
         document.querySelectorAll(".log-filter").forEach(chip => {
@@ -2322,7 +2349,7 @@ ${(appData.gaps && appData.gaps.length)
         });
         if (consoleBody) {
             Array.from(consoleBody.children).forEach(row => {
-                row.classList.toggle("filtered-out", phase !== "all" && row.dataset.phase !== phase);
+                row.classList.toggle("filtered-out", !logRowMatchesFilter(row, phase));
             });
         }
         setLogsEmptyState();
@@ -2362,6 +2389,143 @@ ${(appData.gaps && appData.gaps.length)
     setLogsEmptyState();
 
     // ----------------------------------------------------------------------
+    // 7a-ii. RUN PROGRESS PANEL
+    // Lives on the Run migration tab so starting a run does not move the user
+    // somewhere else. Progress is measured in apps actually finished, never on
+    // a timer — a bar that advances on a clock claims work that has not
+    // happened, which is the one thing this UI must not do.
+    // ----------------------------------------------------------------------
+    const PROGRESS_PHASES = ["assess", "parse", "map", "gen"];
+
+    // Reset per run: how many apps are in it, and how many have cleared each phase.
+    let progressTotalApps = 0;
+    let progressDone = { assess: 0, parse: 0, map: 0, gen: 0 };
+
+    function setPhaseState(id, label, styleClass, ratio, indeterminate) {
+        const row = document.querySelector(`.phase-bar[data-phase="${id}"]`);
+        const state = document.getElementById(`progress-state-${id}`);
+        const fill = document.getElementById(`progress-fill-${id}`);
+        if (state) {
+            state.textContent = label;
+            state.className = `phase-bar-state ${styleClass || ""}`.trim();
+        }
+        if (row) {
+            row.classList.toggle("is-running", styleClass === "running");
+            row.classList.toggle("is-failed", styleClass === "failed");
+        }
+        if (fill) {
+            fill.classList.toggle("indeterminate", !!indeterminate);
+            // An indeterminate sliver is sized by CSS; a real ratio wins here.
+            if (!indeterminate) fill.style.width = `${Math.round(Math.max(0, Math.min(1, ratio)) * 100)}%`;
+        }
+    }
+
+    function resetRunProgress(totalApps) {
+        progressTotalApps = totalApps || 0;
+        progressDone = { assess: 0, parse: 0, map: 0, gen: 0 };
+
+        const panel = document.getElementById("run-progress");
+        if (panel) panel.classList.remove("hidden");
+
+        const count = document.getElementById("run-progress-count");
+        if (count) count.textContent = `0 of ${progressTotalApps} app${progressTotalApps === 1 ? "" : "s"}`;
+
+        const tail = document.getElementById("run-progress-tail");
+        if (tail) {
+            tail.className = "run-progress-tail";
+            tail.textContent = "Starting the migration engine…";
+        }
+
+        // Assessment is the only phase that begins immediately; the rest wait.
+        PROGRESS_PHASES.forEach(id => setPhaseState(id, "Waiting", "", 0, false));
+        setPhaseState("assess", "Running", "running", 0, true);
+    }
+
+    // Called for every engine line. A phase that has produced output is at least
+    // running, which is what turns the next bar on without inventing a number.
+    function noteRunProgress(phaseId, msgHtml) {
+        const panel = document.getElementById("run-progress");
+        if (!panel || panel.classList.contains("hidden")) return;
+
+        const probe = document.createElement("div");
+        probe.innerHTML = msgHtml;
+        const text = probe.textContent;
+
+        const tail = document.getElementById("run-progress-tail");
+        if (tail) {
+            const failed = logSeverity(text) === "is-error";
+            tail.className = `run-progress-tail${failed ? " is-error" : ""}`;
+            tail.textContent = text.split("\n")[0].slice(0, 200);
+        }
+
+        // Reaching a phase means everything before it has started for this app.
+        const reachedAt = PROGRESS_PHASES.indexOf(phaseId);
+        if (reachedAt < 0) return;
+        PROGRESS_PHASES.forEach((id, i) => {
+            if (i > reachedAt) return;
+            const state = document.getElementById(`progress-state-${id}`);
+            if (state && state.textContent === "Waiting") {
+                setPhaseState(id, "Running", "running", 0, true);
+            }
+        });
+    }
+
+    // One app has cleared the phases the engine reported for it. Ratios move only
+    // here, so a bar can never be ahead of the work.
+    function markAppProgress(reachedPhases) {
+        const panes = new Set((reachedPhases || []).map(p => PHASE_TO_PANE[p]).filter(Boolean));
+        PROGRESS_PHASES.forEach(id => {
+            if (!panes.has(id)) return;
+            progressDone[id] = Math.min(progressTotalApps, progressDone[id] + 1);
+        });
+
+        const count = document.getElementById("run-progress-count");
+        if (count) {
+            count.textContent = `${progressDone.gen} of ${progressTotalApps} app${progressTotalApps === 1 ? "" : "s"}`;
+        }
+
+        PROGRESS_PHASES.forEach(id => {
+            const ratio = progressTotalApps ? progressDone[id] / progressTotalApps : 0;
+            if (progressDone[id] >= progressTotalApps && progressTotalApps) {
+                setPhaseState(id, "Done", "completed", 1, false);
+            } else if (progressDone[id] > 0) {
+                setPhaseState(id, `${progressDone[id]}/${progressTotalApps}`, "running", ratio, false);
+            }
+        });
+    }
+
+    // End of run. A phase still short of the total is reported as it actually
+    // ended rather than being quietly filled to 100%.
+    function finishRunProgress(okCount, failCount) {
+        PROGRESS_PHASES.forEach(id => {
+            const ratio = progressTotalApps ? progressDone[id] / progressTotalApps : 0;
+            if (progressDone[id] >= progressTotalApps && progressTotalApps) {
+                setPhaseState(id, "Done", "completed", 1, false);
+            } else if (failCount) {
+                setPhaseState(id, progressDone[id] ? `${progressDone[id]}/${progressTotalApps}` : "Failed", "failed", ratio, false);
+            } else {
+                setPhaseState(id, `${progressDone[id]}/${progressTotalApps}`, "", ratio, false);
+            }
+        });
+
+        const tail = document.getElementById("run-progress-tail");
+        if (tail) {
+            tail.className = `run-progress-tail${failCount ? " is-error" : ""}`;
+            tail.textContent = failCount
+                ? `Finished with ${okCount} succeeded, ${failCount} failed — open the Logs tab for the detail.`
+                : `Finished. ${okCount} app${okCount === 1 ? "" : "s"} migrated.`;
+        }
+    }
+
+    const btnGotoLogs = document.getElementById("btn-goto-logs");
+    if (btnGotoLogs) {
+        btnGotoLogs.addEventListener("click", (e) => {
+            e.preventDefault();
+            switchTab("tab-logs");
+        });
+    }
+
+    // ----------------------------------------------------------------------
     // 7b. REAL ENGINE RUNS
     // The four panes used to be filled by setTimeout on a fixed script while the
     // browser built its own output. They now show what cli/ai_qvf_to_powerbi.py
@@ -2371,6 +2535,7 @@ ${(appData.gaps && appData.gaps.length)
 
     // The engine's four real phases, mapped onto the four existing panes.
     const PHASE_TO_PANE = { extract: "assess", model: "parse", report: "map", package: "gen" };
+    const PHASE_ORDER_KEYS = Object.keys(PHASE_TO_PANE);
 
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
@@ -2548,9 +2713,12 @@ ${(appData.gaps && appData.gaps.length)
                     applyEngineSummary(app, run);
                     completed.push(app);
                     (run.reached || []).forEach(p => setAgentBadge(PHASE_TO_PANE[p], "COMPLETED", "completed"));
+                    markAppProgress(run.reached);
                 } else {
                     failed.push({ name: app.filename, message: run.error || `Engine status: ${run.status}` });
                     appendLogToAgent("gen", "—", `[FAILED] ${escapeHtml(run.error || run.status)}`);
+                    // Only the phases this app genuinely cleared are credited.
+                    markAppProgress(run.reached);
                 }
             } catch (err) {
                 console.error(err);
@@ -2558,6 +2726,8 @@ ${(appData.gaps && appData.gaps.length)
                 appendLogToAgent("gen", "—", `[FAILED] ${escapeHtml(err.message)}`);
             }
         }
+
+        finishRunProgress(completed.length, failed.length);
 
         if (consoleBadge) {
             const ok = completed.length && !failed.length;
@@ -2776,9 +2946,11 @@ ${(appData.gaps && appData.gaps.length)
             consoleBadge.className = "console-status running";
             consoleBadge.innerHTML = `<span class="pulse-dot"></span> RUNNING`;
         }
-        // The output is a tab of its own now, so the run opens it rather than
-        // unfolding a panel under the form.
-        switchTab("tab-logs");
+        // The run stays on this tab. The progress panel below the button reports
+        // it; the Logs tab holds the full stream for whoever wants to open it.
+        const runApps = getBatchApps();
+        if (!runApps.length) runApps.push(currentActiveQvf);
+        resetRunProgress(runApps.length);
 
         ["assess", "parse", "map", "gen"].forEach(id => {
             // The per-agent tab mirrors the same stream, so clear it too and drop
@@ -2791,23 +2963,24 @@ ${(appData.gaps && appData.gaps.length)
             setAgentRunState(id, "Run in progress…");
         });
 
-        // Every line goes to two places: the unified Logs tab, and the agent's own
-        // detail pane under Agents.
+        // Every line goes to three places: the unified Logs tab, the agent's own
+        // detail pane under Agents, and the progress panel's tail line.
         const appendLogToAgent = (id, timeSec, msg) => {
             appendUnifiedLog(id, timeSec, msg);
             const box = document.getElementById(`logs-detail-${id}`);
-            if (!box) return;
-            const row = document.createElement("div");
-            row.className = "log-line";
-            row.innerHTML = `<span class="log-time">[+${timeSec}s]</span> ${msg}`;
-            box.appendChild(row);
-            box.scrollTop = box.scrollHeight;
+            if (box) {
+                const row = document.createElement("div");
+                row.className = "log-line";
+                row.innerHTML = `<span class="log-time">[+${timeSec}s]</span> ${msg}`;
+                const severity = logSeverity(row.textContent);
+                if (severity) row.classList.add(severity);
+                box.appendChild(row);
+                box.scrollTop = box.scrollHeight;
+            }
+            noteRunProgress(id, msg);
         };
 
         const setAgentBadge = (id, label, styleClass) => setAgentStatus(id, label, styleClass);
-
-        const runApps = getBatchApps();
-        if (!runApps.length) runApps.push(currentActiveQvf);
 
         // Both sources reach the engine: an upload already holds its bytes, and a
         // live Qlik Cloud app is exported from the tenant first. Only an app with
@@ -2909,6 +3082,11 @@ ${(appData.gaps && appData.gaps.length)
                 count: runApps.length
             };
             renderAgentDetailTabs();
+
+            // This path builds every app through all four phases, so each one is
+            // credited with the full set.
+            runApps.forEach(() => markAppProgress(PHASE_ORDER_KEYS));
+            finishRunProgress(runApps.length, 0);
 
             // 2. Change button to SUCCESS & make it clickable to jump to the history
             btnElem.disabled = false;

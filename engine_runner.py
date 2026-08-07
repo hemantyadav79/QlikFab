@@ -16,6 +16,7 @@ smooths over, or fills in a phase the engine did not report.
 Credentials never reach this module: it operates on an uploaded .qvf only.
 """
 
+import errno
 import json
 import os
 import re
@@ -350,6 +351,12 @@ class MigrationRun:
 
         return summary
 
+    def cleanup(self):
+        """Drops the run's work dir — the exported .qvf plus everything the
+        engine wrote. RunStore calls this when a run ages out; without it the
+        temp volume grows by the size of every app ever migrated."""
+        shutil.rmtree(self.work_dir, ignore_errors=True)
+
 
 # Qlik Cloud export is two calls: one to materialise the app, one to fetch it.
 QLIK_HOST_SUFFIXES = (".qlikcloud.com", ".qlik.com")
@@ -425,6 +432,19 @@ def download_qlik_app(tenant, app_id, authorization, dest_path, note):
         raise RuntimeError(_describe_http_error(err, "Downloading the exported app"))
     except urllib.error.URLError as err:
         raise RuntimeError("The export download did not complete: %s" % err.reason)
+    except OSError as err:
+        # A bare "[Errno 28] No space left on device" names the symptom on a line
+        # that says "Downloading", which reads as a network fault. Say where the
+        # write went and how much of it landed.
+        if err.errno == errno.ENOSPC:
+            raise RuntimeError(
+                "Ran out of disk space while writing the exported .qvf.\n\n"
+                "Wrote %.1f MB to %s before the volume filled.\n\n"
+                "Free space on that drive, or point TMPDIR/TEMP at one with room, "
+                "then run the migration again."
+                % (written / 1048576.0, os.path.dirname(dest_path))
+            )
+        raise RuntimeError("Could not write the exported .qvf: %s" % err)
 
     if not written:
         raise RuntimeError("The tenant returned an empty export, so there was nothing to migrate.")
@@ -436,9 +456,6 @@ def _flatten(expression):
     if isinstance(expression, list):
         return "\n".join(str(part) for part in expression)
     return expression if expression is None else str(expression)
-
-    def cleanup(self):
-        shutil.rmtree(self.work_dir, ignore_errors=True)
 
 
 class RunStore:
