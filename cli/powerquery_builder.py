@@ -47,9 +47,7 @@ def escape_m_string(value: str) -> str:
 
 
 def escape_m_identifier(name: str) -> str:
-    """Quote an identifier for M (#"Name with spaces")."""
-    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name or ""):
-        return name
+    """Quote an identifier for M (#"Name with spaces"). Always quoted to avoid reserved keyword collisions."""
     return '#"%s"' % escape_m_string(name)
 
 

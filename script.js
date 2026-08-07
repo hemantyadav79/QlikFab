@@ -1037,7 +1037,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const schemaFields = colsList.map(c => {
             const mType = (c.dataType === "double" || c.dataType === "int64")
                 ? "type number" : "type text";
-            return `${/^[A-Za-z_][A-Za-z0-9_]*$/.test(c.name) ? c.name : '#"' + c.name.replace(/"/g, '""') + '"'} = ${mType}`;
+            return `#"${c.name.replace(/"/g, '""')}" = ${mType}`;
         }).join(", ");
 
         const mExpression = [
