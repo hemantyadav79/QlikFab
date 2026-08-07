@@ -1028,48 +1028,23 @@ document.addEventListener("DOMContentLoaded", () => {
             lineageTag: "meas-" + Math.random().toString(36).substring(2, 10)
         }));
 
-        const categoriesList = ["Airline", "Ecommerce", "Education", "Electronics", "Entertainment", "Fashion", "Financial Services", "Food Delivery", "Fuel", "Grocery", "Hospital", "Hotel", "Pharmacy", "Retail"];
-        const citiesList = ["New York", "Chicago", "Los Angeles", "Houston", "Miami", "Seattle", "London", "Tokyo", "Paris", "Berlin"];
-        const merchantsList = ["Alpha Store", "Beta Retail", "Gamma Express", "Delta Commerce", "Epsilon Foods", "Zeta Electronics", "Omega Services", "Apex Traders", "Summit Goods", "Prime Logistics"];
-        const statusList = ["Active", "Completed", "Pending", "Approved", "Verified"];
-
-        const allRowsStr = [];
-        for (let i = 1; i <= 100; i++) {
-            const rowVals = colsList.map(c => {
-                const nameL = c.name.toLowerCase();
-                if (c.dataType === "double" || c.dataType === "int64") {
-                    if (nameL.includes("rating") || nameL.includes("score")) {
-                        return ((30 + (i % 20)) / 10).toFixed(1);
-                    }
-                    return "" + Math.round((i * 125 + 450) % 8500 + 150);
-                }
-                if (nameL.includes("category") || nameL.includes("type") || nameL.includes("genre")) {
-                    return categoriesList[i % categoriesList.length];
-                }
-                if (nameL.includes("city") || nameL.includes("location") || nameL.includes("state") || nameL.includes("region") || nameL.includes("country")) {
-                    return citiesList[i % citiesList.length];
-                }
-                if (nameL.includes("status")) {
-                    return statusList[i % statusList.length];
-                }
-                if (nameL.includes("merchant") || nameL.includes("company") || nameL.includes("customer") || nameL.includes("name")) {
-                    return merchantsList[i % merchantsList.length] + " " + i;
-                }
-                if (nameL.includes("id") || nameL.includes("code") || nameL.includes("key")) {
-                    return c.name + "_" + (1000 + i);
-                }
-                return c.name + "_" + i;
-            });
-            allRowsStr.push("{" + rowVals.map(v => `"${v}"`).join(", ") + "}");
-        }
-
-        const headerStr = "{" + colsList.map(c => `"${c.name}"`).join(", ") + "}";
-        const typeListStr = "{" + colsList.map(c => `{"${c.name}", ${c.dataType === "double" || c.dataType === "int64" ? "type number" : "type text"}}`).join(", ") + "}";
+        // Build a schema-only M expression: correct column types, zero rows.
+        // Fabric's M engine rejects large inline #table() payloads and strings
+        // containing special characters (#, quotes). An empty typed schema is
+        // what the CLI engine writes for any source it cannot connect, so the
+        // model is structurally complete and reports open cleanly — visuals are
+        // empty until the user connects their real data source.
+        const schemaFields = colsList.map(c => {
+            const mType = (c.dataType === "double" || c.dataType === "int64")
+                ? "type number" : "type text";
+            return `${/^[A-Za-z_][A-Za-z0-9_]*$/.test(c.name) ? c.name : '#"' + c.name.replace(/"/g, '""') + '"'} = ${mType}`;
+        }).join(", ");
 
         const mExpression = [
             "let",
-            `    Source = #table(${headerStr}, {${allRowsStr.join(", ")}}),`,
-            `    Typed = Table.TransformColumnTypes(Source, ${typeListStr})`,
+            "    // Schema migrated from Qlik — connect a data source to populate.",
+            `    Source = #table(type table [${schemaFields}], {}),`,
+            `    Typed = Source`,
             "in",
             "    Typed"
         ];
