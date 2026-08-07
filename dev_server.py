@@ -31,6 +31,7 @@ import urllib.parse
 import urllib.request
 
 import engine_runner
+import fabric_publisher
 
 # Serve the project regardless of where the launcher happened to be standing.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -89,6 +90,11 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
             return
         if path == RUNS_PATH:
             self.handle_run_start()
+            return
+        # /api/runs/<id>/publish — pushes what the run produced into a Fabric
+        # workspace. Server-side, so the PBIP never travels to the browser.
+        if path.startswith(RUNS_PATH + "/") and path.endswith("/publish"):
+            self.handle_run_publish(path[len(RUNS_PATH) + 1:-len("/publish")])
             return
         # Exporting a Qlik app is a POST; the same relay handles it so the browser
         # never talks to the tenant directly.
@@ -161,6 +167,55 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
         run = engine_runner.STORE.create(name, payload=None)
         run.start_from_qlik(tenant, app_id, authorization)
         self.send_json(202, run.snapshot())
+
+    def handle_run_publish(self, run_id):
+        """Publishes a finished run into a Fabric workspace.
+
+        The access token arrives in the Authorization header — the browser
+        already holds one from /fabric-token — is used for the Fabric calls, and
+        is not stored or logged.
+        """
+        self.drain_body()
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        workspace_id = (query.get("workspace") or [""])[0]
+        display_name = (query.get("name") or [""])[0]
+        authorization = self.headers.get("Authorization") or ""
+        token = authorization[7:].strip() if authorization[:7].lower() == "bearer " else ""
+
+        run = engine_runner.STORE.get(run_id)
+        if not run:
+            self.send_json(404, {"error": "No run %r. Runs are kept in memory and are lost when the server restarts." % run_id})
+            return
+        if not workspace_id:
+            self.send_json(400, {"error": "No target workspace was given."})
+            return
+        if not token:
+            self.send_json(401, {"error": "No Fabric access token. Run Test Fabric Connection first."})
+            return
+        # Publishing what a failed run left behind would put a half-built model
+        # in the workspace, so only a completed run is publishable.
+        if run.status != "completed":
+            self.send_json(409, {
+                "error": "This run is %s, so there is nothing complete to publish." % run.status
+            })
+            return
+        if not os.path.isdir(run.output_dir):
+            self.send_json(409, {"error": "The run produced no output directory to publish."})
+            return
+
+        name = display_name or engine_runner.safe_stem(run.filename)
+        try:
+            result = fabric_publisher.publish(
+                run.output_dir, workspace_id, token, name, note=run.note
+            )
+        except Exception as err:                  # noqa: BLE001 - shown to the user verbatim
+            run.note("[publish] FAILED: %s" % err)
+            self.send_json(502, {"error": str(err)})
+            return
+
+        run.note("[publish] Published '%s' to workspace %s." % (name, workspace_id))
+        result["workspaceId"] = workspace_id
+        self.send_json(200, result)
 
     def handle_run_get(self, rest):
         parts = [p for p in rest.split("/") if p]

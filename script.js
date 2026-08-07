@@ -597,7 +597,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const destinationCard = targeted.length ? `
             <div class="table-container">
                 <h3>Microsoft Fabric destination</h3>
-                <p class="agent-section-note">Recorded with the run and written into the audit report. The files below are generated for you to download — this client does not publish to the workspace.</p>
+                <p class="agent-section-note">Recorded with the run and written into the audit report. Each completed app is published into the workspace as a semantic model plus a report; the files below stay downloadable either way.</p>
                 <table class="custom-table">
                     <thead><tr><th>App</th><th>Workspace</th><th>Capacity</th><th>Item name prefix</th></tr></thead>
                     <tbody>${targeted.map(a => `
@@ -1771,14 +1771,18 @@ ${appData.daxQueue.length
     })()}
 - Output Path: ${appData.projectDir}
 
-## 4. Intended Destination
+## 4. Destination
 ${appData.fabricTarget
     ? `- Microsoft Fabric workspace: ${appData.fabricTarget.workspace}
 - Workspace ID: ${appData.fabricTarget.workspaceId || "not resolved (entered by name)"}
 - Capacity: ${appData.fabricTarget.capacity || "workspace default"}
 - Item name prefix: ${appData.fabricTarget.prefix || appData.name}
-- NOT PUBLISHED: the artifacts were generated for download. Nothing was written to this workspace by the migration client.`
-    : "- None recorded. The artifacts were generated for local download only."}
+${appData.fabricPublished
+    ? `- PUBLISHED as "${appData.fabricPublished.displayName}"
+  - Semantic model id: ${appData.fabricPublished.semanticModelId || "not returned"}
+  - Report id: ${appData.fabricPublished.reportId || "not created"}`
+    : "- NOT PUBLISHED to this workspace. The artifacts were built locally only; see the Logs tab for why the publish did not happen."}`
+    : "- None recorded. The artifacts were built for local download only."}
 
 ## 5. Gaps — not recovered from the source
 ${(appData.gaps && appData.gaps.length)
@@ -2681,10 +2685,100 @@ ${(appData.gaps && appData.gaps.length)
     }
 
     // Drives one engine run per uploaded file and reports exactly what came back.
+    // ----------------------------------------------------------------------
+    // 7c. PUBLISH TO MICROSOFT FABRIC
+    // The PBIP the engine wrote lives on the server, and so does the publish:
+    // the browser hands over the workspace, the name and the token it already
+    // holds, and the server does the Items API calls. Nothing is reported as
+    // published until Fabric has confirmed the item exists.
+    // ----------------------------------------------------------------------
+
+    // True only when there is somewhere to publish to and a token to do it with.
+    function fabricPublishReady() {
+        if (!fabricConnection || !fabricConnection.accessToken) return false;
+        if (fabricConnection.expiresAt && Date.now() >= fabricConnection.expiresAt) return false;
+        const destination = readFabricTarget();
+        return !!destination.workspaceId;
+    }
+
+    async function publishRunToFabric(app, run, appendLogToAgent) {
+        const destination = readFabricTarget();
+
+        // A workspace typed by hand is a name, not an id, and the Items API
+        // addresses workspaces by id only. Say so rather than failing obscurely.
+        if (!destination.workspaceId) {
+            const why = destination.workspace
+                ? `The workspace was entered as a name ("${destination.workspace}"). Publishing needs the workspace id — connect to Fabric so it can be picked from the list.`
+                : "No Fabric workspace was selected.";
+            appendLogToAgent("gen", "—", `[SKIPPED] Not published. ${escapeHtml(why)}`);
+            return { skipped: true };
+        }
+        if (!fabricPublishReady()) {
+            const why = fabricConnection
+                ? "The Fabric token has expired — run Test Fabric Connection again."
+                : "Not signed in to Microsoft Fabric.";
+            appendLogToAgent("gen", "—", `[SKIPPED] Not published. ${escapeHtml(why)}`);
+            return { skipped: true };
+        }
+        if (!run.id) {
+            appendLogToAgent("gen", "—", `[SKIPPED] Not published: the run reported no id.`);
+            return { skipped: true };
+        }
+
+        // The prefix names the items in the workspace; without one the Qlik app
+        // name is used, which is what the field's placeholder promises.
+        const baseName = (destination.prefix || app.name || app.filename || "Migrated app")
+            .replace(/\.qvf$/i, "");
+        const params = new URLSearchParams({
+            workspace: destination.workspaceId,
+            name: baseName
+        });
+
+        appendLogToAgent("gen", "—", `[publish] Publishing "${escapeHtml(baseName)}" to ${escapeHtml(destination.workspace)}…`);
+        try {
+            const response = await fetch(`/api/runs/${run.id}/publish?${params}`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${fabricConnection.accessToken}` }
+            });
+            let body = {};
+            try {
+                body = await response.json();
+            } catch (e) { /* an empty body is handled by the status check */ }
+
+            if (!response.ok) {
+                const message = body.error || `HTTP ${response.status}`;
+                appendLogToAgent("gen", "—", `[FAILED] Publish to Fabric failed. ${escapeHtml(message)}`);
+                return { error: message };
+            }
+
+            app.fabricPublished = {
+                workspace: destination.workspace,
+                workspaceId: destination.workspaceId,
+                semanticModelId: body.semanticModelId || null,
+                reportId: body.reportId || null,
+                displayName: body.displayName || baseName
+            };
+            appendLogToAgent("gen", "—",
+                `[OK] Published to ${escapeHtml(destination.workspace)} — semantic model ${escapeHtml(body.semanticModelId || "?")}` +
+                (body.reportId ? `, report ${escapeHtml(body.reportId)}` : ""));
+            return app.fabricPublished;
+        } catch (err) {
+            console.error(err);
+            const message = err.name === "TypeError"
+                ? "Could not reach the local relay. Start the app with: python dev_server.py"
+                : err.message;
+            appendLogToAgent("gen", "—", `[FAILED] Publish to Fabric failed. ${escapeHtml(message)}`);
+            return { error: message };
+        }
+    }
+
     async function runRealEngine(btnElem, engineApps, runApps, originalText, runStartedAt, appendLogToAgent, setAgentBadge) {
         const reached = new Set();
         const completed = [];
         const failed = [];
+        // A build that succeeded but could not be published is neither a clean
+        // pass nor an engine failure, so it is counted on its own.
+        const publishFailures = [];
 
         for (let i = 0; i < engineApps.length; i++) {
             const app = engineApps[i];
@@ -2714,6 +2808,13 @@ ${(appData.gaps && appData.gaps.length)
                     completed.push(app);
                     (run.reached || []).forEach(p => setAgentBadge(PHASE_TO_PANE[p], "COMPLETED", "completed"));
                     markAppProgress(run.reached);
+                    // The build succeeded, so it can go to the workspace. A
+                    // publish that fails is reported against this app without
+                    // sinking the ones still to run.
+                    const published = await publishRunToFabric(app, run, appendLogToAgent);
+                    if (published && published.error) {
+                        publishFailures.push({ name: app.name || app.filename, message: published.error });
+                    }
                 } else {
                     failed.push({ name: app.filename, message: run.error || `Engine status: ${run.status}` });
                     appendLogToAgent("gen", "—", `[FAILED] ${escapeHtml(run.error || run.status)}`);
@@ -2730,11 +2831,13 @@ ${(appData.gaps && appData.gaps.length)
         finishRunProgress(completed.length, failed.length);
 
         if (consoleBadge) {
-            const ok = completed.length && !failed.length;
+            // A build that succeeded but did not reach the workspace is not a
+            // clean pass, so the badge must not claim one.
+            const ok = completed.length && !failed.length && !publishFailures.length;
             consoleBadge.className = `console-status ${ok ? "success" : "error"}`;
             consoleBadge.innerHTML = ok
                 ? `<i class="fa-solid fa-check"></i> COMPLETED`
-                : `<i class="fa-solid fa-triangle-exclamation"></i> ${completed.length} OK / ${failed.length} FAILED`;
+                : `<i class="fa-solid fa-triangle-exclamation"></i> ${completed.length} OK / ${failed.length + publishFailures.length} FAILED`;
         }
 
         if (metricsRow && completed.length) {
@@ -2780,13 +2883,34 @@ ${(appData.gaps && appData.gaps.length)
             btnElem.innerHTML = originalText;
         }
 
-        if (failed.length) {
-            setConnStatus("run-status", "error", [
-                `${failed.length} of ${engineApps.length} app(s) did not migrate:`,
-                "",
-                failed.map(f => `• ${f.name}\n  ${f.message}`).join("\n\n"),
-                completed.length ? `\n${completed.length} app(s) did complete — see Migration history.` : ""
-            ].join("\n"));
+        if (failed.length || publishFailures.length) {
+            const lines = [];
+            if (failed.length) {
+                lines.push(
+                    `${failed.length} of ${engineApps.length} app(s) did not migrate:`,
+                    "",
+                    failed.map(f => `• ${f.name}\n  ${f.message}`).join("\n\n")
+                );
+            }
+            if (publishFailures.length) {
+                if (lines.length) lines.push("");
+                lines.push(
+                    `${publishFailures.length} app(s) built but did not reach the Fabric workspace:`,
+                    "",
+                    publishFailures.map(f => `• ${f.name}\n  ${f.message}`).join("\n\n"),
+                    "",
+                    "The .pbip / .pbit are still downloadable from Migration history."
+                );
+            }
+            if (completed.length && !publishFailures.length) {
+                lines.push(`\n${completed.length} app(s) did complete — see Migration history.`);
+            }
+            setConnStatus("run-status", "error", lines.join("\n"));
+        } else if (completed.length) {
+            const landed = completed.filter(a => a.fabricPublished);
+            setConnStatus("run-status", "success", landed.length
+                ? `${landed.length} app(s) published to ${landed[0].fabricPublished.workspace}. Open the workspace in Fabric to see the semantic model and report.`
+                : `${completed.length} app(s) built. Nothing was published — see the Logs tab for why.`);
         }
     }
 
