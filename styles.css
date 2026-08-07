@@ -3067,6 +3067,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
 .summary-card-body {
     display: flex;
     flex-direction: column;
+    flex-grow: 1;
     gap: 12px;
     font-size: 13px;
     line-height: 1.5;
@@ -3088,7 +3089,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
 
 .summary-feature-list li {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     font-size: 12.5px;
     color: var(--text-strong);
@@ -3097,6 +3098,8 @@ html[data-theme="dark"] .theme-toggle__thumb {
 .summary-feature-list li i {
     color: #10b981;
     font-size: 11px;
+    margin-top: 3px;
+    flex-shrink: 0;
 }
 
 .summary-mapping-chips {
@@ -3123,7 +3126,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    margin-top: 4px;
+    margin-top: auto;
 }
 
 .summary-card-note i {
