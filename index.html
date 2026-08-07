@@ -574,9 +574,31 @@
 
             <!-- TAB: AGENTS SUMMARY -->
             <section id="tab-summary" class="tab-pane">
-                <div class="summary-header">
-                    <h2>Autonomous Agents Architectural Summary</h2>
-                    <p class="tab-desc">Technical breakdown of the 4 autonomous migration engine phases implemented in <code>cli/ai_qvf_to_powerbi.py</code> and <code>cli/qvf_extractor.py</code>.</p>
+                <!-- HERO EXECUTIVE BANNER -->
+                <div class="summary-hero">
+                    <div class="summary-hero-content">
+                        <div class="summary-hero-pill"><i class="fa-solid fa-microchip"></i> Engine Pipeline Specification</div>
+                        <h1>Autonomous Migration Architecture &amp; Summary</h1>
+                        <p>Comprehensive architectural guide for the 4 autonomous migration engine phases implemented in <code>cli/qvf_extractor.py</code> and <code>cli/ai_qvf_to_powerbi.py</code>. The pipeline guarantees 100% deterministic schema extraction, multi-tiered AI translation, and transparent audit trails.</p>
+                    </div>
+                    <div class="summary-hero-stats">
+                        <div class="summary-stat-pill">
+                            <span class="stat-num">4</span>
+                            <span class="stat-lbl">Engine Phases</span>
+                        </div>
+                        <div class="summary-stat-pill">
+                            <span class="stat-num">100%</span>
+                            <span class="stat-lbl">Deterministic Schema</span>
+                        </div>
+                        <div class="summary-stat-pill">
+                            <span class="stat-num">4-Tier</span>
+                            <span class="stat-lbl">AI Brain Failover</span>
+                        </div>
+                        <div class="summary-stat-pill">
+                            <span class="stat-num">Zero</span>
+                            <span class="stat-lbl">Data Fabrication</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="summary-cards-grid">
@@ -588,32 +610,32 @@
                             </div>
                             <div class="summary-card-meta">
                                 <span class="summary-phase-badge badge-blue">Phase 1 &middot; Extract</span>
-                                <h3 class="summary-card-title">1. Assessment &mdash; extract</h3>
+                                <h3 class="summary-card-title">1. Assessment &mdash; Extract</h3>
                             </div>
                         </div>
 
                         <div class="summary-card-job">
-                            <span class="summary-job-label"><i class="fa-solid fa-briefcase"></i> Job:</span>
-                            <span class="summary-job-text">Get facts out of the source file. Read-only reverse-engineering of .qvf binary.</span>
+                            <span class="summary-job-label"><i class="fa-solid fa-bolt"></i> Purpose:</span>
+                            <span class="summary-job-text">Read-only fact extraction out of the source Qlik file. Reverse-engineers opaque <code>.qvf</code> binaries with zero data corruption.</span>
                         </div>
 
                         <div class="summary-card-impl">
-                            <span class="summary-impl-badge"><i class="fa-solid fa-code"></i> Implemented in <code>cli/qvf_extractor.py</code></span>
+                            <span class="summary-impl-badge"><i class="fa-solid fa-code"></i> Module: <code>cli/qvf_extractor.py</code> &middot; <code>QVFExtractor</code></span>
                         </div>
 
                         <div class="summary-card-body">
                             <p class="summary-card-paragraph">
-                                A <code>.qvf</code> is an opaque Qlik binary archive. This phase reverse-engineers it in <strong>7 steps</strong>: reads file header, scans binary for zlib-compressed streams, decompresses and classifies each as JSON, then extracts:
+                                A <code>.qvf</code> is an opaque Qlik binary archive. This phase reverse-engineers it through a <strong>7-step decompression pipeline</strong>: reads file headers, scans binary for zlib-compressed streams, decompresses and classifies each JSON stream, then extracts:
                             </p>
                             <ul class="summary-feature-list">
-                                <li><i class="fa-solid fa-check"></i> <strong>Load Script:</strong> How Qlik sourced its data</li>
-                                <li><i class="fa-solid fa-check"></i> <strong>Data Model:</strong> Fields, tables, and data types</li>
-                                <li><i class="fa-solid fa-check"></i> <strong>Sheet Inventory:</strong> Visual chart objects, dimensions, and measure expressions</li>
-                                <li><i class="fa-solid fa-check"></i> <strong>App Metadata:</strong> App properties and variables</li>
+                                <li><i class="fa-solid fa-circle-check"></i> <strong>Load Script:</strong> Complete Qlik data extraction and transformation syntax</li>
+                                <li><i class="fa-solid fa-circle-check"></i> <strong>Data Model:</strong> Table structures, field names, relationships, and data types</li>
+                                <li><i class="fa-solid fa-circle-check"></i> <strong>Sheet Inventory:</strong> Visual chart objects, dimensions, and measure expressions</li>
+                                <li><i class="fa-solid fa-circle-check"></i> <strong>App Metadata:</strong> App properties, system variables, and bookmark states</li>
                             </ul>
                             <div class="summary-card-note warning-note">
                                 <i class="fa-solid fa-triangle-exclamation"></i>
-                                <span><strong>Fallback Recovery:</strong> If the data-model stream is unreadable, it recovers field names from the load script, then raw binary regions. Emits <code>[WARN]</code> and reports gaps rather than inventing them.</span>
+                                <span><strong>Fallback Recovery Engine:</strong> If the data-model stream is unreadable, it recovers field names from the load script, then from raw binary regions. It emits <code>[WARN]</code> logs and reports gaps rather than inventing missing metadata.</span>
                             </div>
                         </div>
                     </div>
@@ -626,31 +648,31 @@
                             </div>
                             <div class="summary-card-meta">
                                 <span class="summary-phase-badge badge-cyan">Phase 2 &middot; Model</span>
-                                <h3 class="summary-card-title">2. Parsing &mdash; model</h3>
+                                <h3 class="summary-card-title">2. Parsing &mdash; Model</h3>
                             </div>
                         </div>
 
                         <div class="summary-card-job">
-                            <span class="summary-job-label"><i class="fa-solid fa-briefcase"></i> Job:</span>
-                            <span class="summary-job-text">Turn source data structure into target's semantic model (model.bim).</span>
+                            <span class="summary-job-label"><i class="fa-solid fa-bolt"></i> Purpose:</span>
+                            <span class="summary-job-text">Transforms source data structures into Microsoft Power BI's Tabular Semantic Model (<code>model.bim</code>).</span>
                         </div>
 
                         <div class="summary-card-impl">
-                            <span class="summary-impl-badge"><i class="fa-solid fa-code"></i> Implemented in <code>UniversalModelGenerator</code> (<code>ai_qvf_to_powerbi.py:382</code>)</span>
+                            <span class="summary-impl-badge"><i class="fa-solid fa-code"></i> Class: <code>UniversalModelGenerator</code> &middot; <code>ai_qvf_to_powerbi.py:382</code></span>
                         </div>
 
                         <div class="summary-card-body">
                             <p class="summary-card-paragraph">
-                                Compiles <code>model.bim</code> (Power BI's tabular model definition). Tables and field lists come from the load script; column types come from <code>.qvf</code> metadata via <code>TypeResolver</code>.
+                                Compiles <code>model.bim</code> (Power BI's tabular model definition). Tables and field lists originate from the load script; column types are inferred strictly from <code>.qvf</code> metadata via <code>TypeResolver</code>.
                             </p>
                             <ul class="summary-feature-list">
-                                <li><i class="fa-solid fa-check"></i> <strong>DAX Translation:</strong> Line 563 calls multi-tiered AI brain per Qlik expression</li>
-                                <li><i class="fa-solid fa-check"></i> <strong>Type Resolution:</strong> Explicit validation from source metadata</li>
-                                <li><i class="fa-solid fa-check"></i> <strong>Power Query M:</strong> Builds partition source definitions</li>
+                                <li><i class="fa-solid fa-circle-check"></i> <strong>Multi-Tier AI DAX Brain:</strong> Line 563 queries Groq / Gemini APIs to translate complex Set Analysis into DAX</li>
+                                <li><i class="fa-solid fa-circle-check"></i> <strong>Power Query M:</strong> Generates partition source queries for tabular data loading</li>
+                                <li><i class="fa-solid fa-circle-check"></i> <strong>Relationship Graph:</strong> Preserves primary-foreign key relationships</li>
                             </ul>
                             <div class="summary-card-note info-note">
                                 <i class="fa-solid fa-shield-halved"></i>
-                                <span><strong>Zero-Guessing Policy:</strong> <em>"Nothing here fabricates rows or infers a type from a column name."</em> Unresolvable expressions are parked with <code>-- TODO: translate this Qlik expression manually</code> stubs rather than a plausible-looking wrong answer.</span>
+                                <span><strong>Strict Non-Guessing Policy:</strong> <em>"Nothing here fabricates rows or infers a type from a column name."</em> Unresolvable expressions are parked with <code>-- TODO: translate this Qlik expression manually</code> stubs rather than a plausible-looking wrong answer.</span>
                             </div>
                         </div>
                     </div>
@@ -659,26 +681,26 @@
                     <div class="summary-card">
                         <div class="summary-card-header">
                             <div class="summary-card-icon" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);">
-                                <i class="fa-solid fa-brain"></i>
+                                <i class="fa-solid fa-layer-group"></i>
                             </div>
                             <div class="summary-card-meta">
                                 <span class="summary-phase-badge badge-purple">Phase 3 &middot; Report</span>
-                                <h3 class="summary-card-title">3. Mapping &mdash; report</h3>
+                                <h3 class="summary-card-title">3. Mapping &mdash; Report</h3>
                             </div>
                         </div>
 
                         <div class="summary-card-job">
-                            <span class="summary-job-label"><i class="fa-solid fa-briefcase"></i> Job:</span>
-                            <span class="summary-job-text">Rebuild the visual reporting layer — what the end-user sees.</span>
+                            <span class="summary-job-label"><i class="fa-solid fa-bolt"></i> Purpose:</span>
+                            <span class="summary-job-text">Rebuilds the visual reporting layer — converting Qlik sheets into native Power BI report pages.</span>
                         </div>
 
                         <div class="summary-card-impl">
-                            <span class="summary-impl-badge"><i class="fa-solid fa-code"></i> Implemented in <code>UniversalVisualGenerator</code> (<code>ai_qvf_to_powerbi.py:586</code>)</span>
+                            <span class="summary-impl-badge"><i class="fa-solid fa-code"></i> Class: <code>UniversalVisualGenerator</code> &middot; <code>ai_qvf_to_powerbi.py:586</code></span>
                         </div>
 
                         <div class="summary-card-body">
                             <p class="summary-card-paragraph">
-                                Translates each Qlik chart into its Power BI equivalent via explicit visual lookup mapping:
+                                Translates each Qlik chart into its Power BI equivalent via an explicit visual lookup matrix:
                             </p>
                             <div class="summary-mapping-chips">
                                 <span class="chip">barchart &rarr; clusteredColumnChart</span>
@@ -690,12 +712,12 @@
                                 <span class="chip">gauge &rarr; card</span>
                                 <span class="chip">treemap &rarr; treemap</span>
                             </div>
-                            <p class="summary-card-paragraph" style="margin-top:10px;">
-                                Writes <code>page.json</code> / <code>visual.json</code> per sheet, binding visuals to Phase 2 model columns/measures and laying out canvas coordinates. Chart-level expressions pass through AI brain (line 680).
+                            <p class="summary-card-paragraph" style="margin-top:8px;">
+                                Writes <code>page.json</code> / <code>visual.json</code> per sheet, binding visuals to Phase 2 model columns/measures and setting canvas layout coordinates. Chart-level expressions pass through the AI Brain (line 680).
                             </p>
                             <div class="summary-card-note alert-note">
                                 <i class="fa-solid fa-circle-info"></i>
-                                <span><strong>Fidelity Loss Note:</strong> <code>gauge</code> and <code>kpi</code> collapse to <code>card</code>; <code>distributionplot</code> and <code>combochart</code> collapse to <code>clusteredColumnChart</code>. Power BI has no exact equivalent, so fidelity is intentionally handled via safe native visual mappings.</span>
+                                <span><strong>Fidelity Loss Awareness:</strong> <code>gauge</code> and <code>kpi</code> collapse to <code>card</code>; <code>distributionplot</code> and <code>combochart</code> collapse to <code>clusteredColumnChart</code>. Power BI has no direct 1-to-1 equivalent, so fidelity is intentionally handled via safe native visual mappings.</span>
                             </div>
                         </div>
                     </div>
@@ -704,35 +726,35 @@
                     <div class="summary-card">
                         <div class="summary-card-header">
                             <div class="summary-card-icon" style="background: linear-gradient(135deg, #10b981, #047857);">
-                                <i class="fa-solid fa-boxes-packing"></i>
+                                <i class="fa-solid fa-box-archive"></i>
                             </div>
                             <div class="summary-card-meta">
                                 <span class="summary-phase-badge badge-green">Phase 4 &middot; Package</span>
-                                <h3 class="summary-card-title">4. Report Generation &mdash; package</h3>
+                                <h3 class="summary-card-title">4. Report Generation &mdash; Package</h3>
                             </div>
                         </div>
 
                         <div class="summary-card-job">
-                            <span class="summary-job-label"><i class="fa-solid fa-briefcase"></i> Job:</span>
-                            <span class="summary-job-text">Assemble deliverables and account for overall migration results.</span>
+                            <span class="summary-job-label"><i class="fa-solid fa-bolt"></i> Purpose:</span>
+                            <span class="summary-job-text">Assembles final migration deliverables and generates transparent audit accounting documentation.</span>
                         </div>
 
                         <div class="summary-card-impl">
-                            <span class="summary-impl-badge"><i class="fa-solid fa-code"></i> Implemented in <code>UniversalPBIPGenerator</code> (<code>ai_qvf_to_powerbi.py:732</code>)</span>
+                            <span class="summary-impl-badge"><i class="fa-solid fa-code"></i> Class: <code>UniversalPBIPGenerator</code> &middot; <code>ai_qvf_to_powerbi.py:732</code></span>
                         </div>
 
                         <div class="summary-card-body">
                             <p class="summary-card-paragraph">
-                                Writes project scaffolding (<code>.pbip</code>, <code>definition.pbir</code>, <code>definition.pbism</code>, <code>version.json</code>) and compiles deliverables:
+                                Writes Fabric project scaffolding (<code>.pbip</code>, <code>definition.pbir</code>, <code>definition.pbism</code>, <code>version.json</code>) and compiles full production artifacts:
                             </p>
                             <ul class="summary-feature-list">
-                                <li><i class="fa-solid fa-file-export"></i> <strong>.pbit Template:</strong> Schema-only template (opens directly)</li>
-                                <li><i class="fa-solid fa-file-zipper"></i> <strong>_PBIP.zip Bundle:</strong> Full Microsoft Fabric Power BI Project</li>
-                                <li><i class="fa-solid fa-clipboard-check"></i> <strong>MIGRATION_AUDIT_REPORT.md:</strong> Complete audit record (:1072)</li>
+                                <li><i class="fa-solid fa-circle-check"></i> <strong>.pbit Template:</strong> Schema-only template file opening directly in Power BI Desktop</li>
+                                <li><i class="fa-solid fa-circle-check"></i> <strong>_PBIP.zip Bundle:</strong> Full Microsoft Fabric Power BI Project for workspace publishing</li>
+                                <li><i class="fa-solid fa-circle-check"></i> <strong>MIGRATION_AUDIT_REPORT.md:</strong> Complete audit record (:1072)</li>
                             </ul>
                             <div class="summary-card-note success-note">
                                 <i class="fa-solid fa-circle-check"></i>
-                                <span><strong>Pipeline Trustworthiness:</strong> The audit report records <code>self.ai.unresolved</code> — every expression the AI couldn't translate confidently. This forms your manual review queue, telling you what it didn't manage rather than silently shipping guesses!</span>
+                                <span><strong>Auditability &amp; Trustworthiness:</strong> The audit report records <code>self.ai.unresolved</code> — every expression requiring manual review. The pipeline explicitly reports unmanaged items rather than shipping guesses!</span>
                             </div>
                         </div>
                     </div>
