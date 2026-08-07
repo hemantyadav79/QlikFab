@@ -892,8 +892,8 @@ class UniversalPBIPGenerator:
 
     def _write_definition_pbism(self):
         self._write_json(self.model_dir / "definition.pbism", {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/dataset/definition/datasetProperties/1.0.0/schema.json",
-            "version": "1.0",
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/semanticModel/definitionProperties/1.0.0/schema.json",
+            "version": "4.2",
             "settings": {}
         })
 
