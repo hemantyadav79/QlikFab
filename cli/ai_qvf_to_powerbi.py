@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import collections
 import json
 import os
 import re
@@ -445,10 +446,17 @@ class UniversalModelGenerator:
 
         # Map each field to the table that owns it, so visuals bind correctly.
         self.field_owner = {}
+        self.all_column_names = []
         for table in self.script_tables:
             safe = safe_name(table.name)
             for field in table.fields:
                 self.field_owner.setdefault(field.name.lower(), safe)
+                self.all_column_names.append(field.name)
+
+        # Measures whose DAX had to reach across tables. Qlik associates on
+        # shared field names with no explicit join; Power BI needs a modelled
+        # relationship, so these are reported for the user to wire up.
+        self.cross_table_measures = set()
 
         # The largest table is the sensible default for visuals whose field
         # references cannot be resolved.
@@ -488,11 +496,26 @@ class UniversalModelGenerator:
         model_tables = []
         query_order = []
 
+        # Partitions are built for every table first, because a measure can
+        # reference a column on any table and must be checked against the
+        # columns those partitions actually emit -- not against every field the
+        # Qlik script mentions. Script-derived fields have no column in the
+        # migrated model, so a measure using one has to be flagged, not
+        # repointed at a column that does not exist.
+        built = []
         for table in self.script_tables:
-            safe = safe_name(table.name)
-            query_order.append(safe)
-
             expression, status, column_names = build_partition_expression(table, self.resolver)
+            built.append((table, safe_name(table.name), expression, status, column_names))
+
+        self.field_owner = {}
+        self.all_column_names = []
+        for _table, safe, _expr, _status, column_names in built:
+            for name in column_names:
+                self.field_owner.setdefault(name.lower(), safe)
+                self.all_column_names.append(name)
+
+        for table, safe, expression, status, column_names in built:
+            query_order.append(safe)
 
             columns = [
                 {
@@ -605,11 +628,57 @@ class UniversalModelGenerator:
                     name, dax = self.ai.translate_expression_to_dax(expr, safe, column_names)
                     measures.setdefault(name, {
                         "name": name,
-                        "expression": dax,
+                        "expression": self._rebind_columns(dax, name, expr),
                         "lineageTag": new_guid(),
                     })
 
         return list(measures.values())
+
+    def _rebind_columns(self, dax: str, measure_name: str, qlik_expr: str) -> str:
+        """
+        Point every column reference in a generated measure at the table that
+        actually holds that column.
+
+        The translator is told which table it is writing for, so it qualifies
+        every column with that table -- but a Qlik expression freely mixes
+        fields from across the associative model, and Qlik needs no join to do
+        it. `'FactTable'[Fiscal Year]` is simply not a column that exists.
+
+        Where the column exists on another table the reference is corrected and
+        the measure is flagged as needing a relationship. Where it exists
+        nowhere the whole measure is replaced with a [Needs Review] stub
+        carrying the original Qlik text, rather than shipping DAX that cannot
+        evaluate.
+        """
+        unknown = []
+
+        def fix(match):
+            table, column = match.group(1), match.group(2)
+            owner = self.field_owner.get(column.lower())
+            if owner is None:
+                if column.lower() not in {c.lower() for c in self.all_column_names}:
+                    unknown.append(column)
+                return match.group(0)
+            if owner != table:
+                self.cross_table_measures.add(measure_name)
+            return "'%s'[%s]" % (owner, column)
+
+        repaired = re.sub(r"'([^']+)'\[([^\]]+)\]", fix, dax or "")
+
+        if unknown:
+            self.ai.unresolved.append({
+                "expression": qlik_expr,
+                "table": measure_name,
+                "reason": "references field(s) %s that no migrated table provides"
+                          % ", ".join(sorted(set(unknown))),
+            })
+            return (
+                "-- [Needs Review] The Qlik expression below references field(s) "
+                "%s that this migration could not locate in any table.\n"
+                "-- Original Qlik: %s\n"
+                "BLANK()" % (", ".join(sorted(set(unknown))), (qlik_expr or "").replace("\n", " "))
+            )
+        return repaired
 
     @staticmethod
     def _expression_targets(expression: str, owned_fields: set) -> bool:
@@ -638,30 +707,133 @@ class UniversalVisualGenerator:
         self.field_owner = field_owner or {}
         self.visual_counter = 0
 
+        # Qlik object types this tool has a genuine Power BI counterpart for.
+        # Types whose shape depends on a chart setting (bar orientation, pie
+        # donut, line area) are resolved in _resolve_visual_type instead.
         self.qlik_to_pbi_map = {
-            "barchart": "clusteredColumnChart",
             "linechart": "lineChart",
             "piechart": "pieChart",
-            "distributionplot": "clusteredColumnChart",
-            "filterpane": "slicer",
             "listbox": "slicer",
             "kpi": "card",
-            "sn-table": "tableEx",
             "gauge": "card",
+            "table": "tableEx",
+            "sn-table": "tableEx",
+            "pivot-table": "pivotTable",
+            "sn-pivot-table": "pivotTable",
+            "scatterplot": "scatterChart",
             "treemap": "treemap",
-            "combochart": "clusteredColumnChart",
+            "waterfallchart": "waterfallChart",
+            "histogram": "clusteredColumnChart",
+            "map": "map",
+            "text-image": "textbox",
+            "combochart": "lineClusteredColumnComboChart",
         }
 
+        # Qlik objects that hold other objects rather than rendering data. The
+        # extractor already flattens their children into the sheet, so emitting
+        # the container as well would duplicate every visual inside it. A
+        # filter pane is one of these: it is a frame around listboxes, and each
+        # of those listboxes becomes its own Power BI slicer.
+        self.container_types = {
+            "sn-layout-container", "container", "tabbed-container", "filterpane",
+        }
+
+        # Qlik types with no faithful Power BI equivalent. They are rendered as
+        # the closest approximation and reported, never silently substituted.
+        self.approximated_types = {
+            "distributionplot": ("clusteredColumnChart",
+                                 "Power BI has no distribution plot"),
+            "boxplot": ("clusteredColumnChart", "Power BI has no box plot"),
+            "bulletchart": ("clusteredBarChart", "Power BI has no bullet chart"),
+        }
+
+        # Populated as visuals are built, surfaced in the audit report.
+        self.fidelity_notes = []
+
+    @staticmethod
+    def _chart_title(chart: dict) -> str:
+        """
+        The chart's title as display text.
+
+        A Qlik title is usually a plain string, but it can also be a computed
+        expression -- {"qStringExpression": {"qExpr": "'Revenue = ' & num(...)"}}.
+        There is no DAX equivalent for a title that recomputes against the
+        current selection, so the static part is kept and the dynamic part is
+        reported rather than rendered as a Python dict repr.
+        """
+        title = chart.get("title", "")
+        if isinstance(title, dict):
+            expr = (title.get("qStringExpression") or {}).get("qExpr", "")
+            literal = re.match(r"\s*'([^']*)'", str(expr))
+            return (literal.group(1).strip() if literal else "").strip(" =")
+        return str(title or "").strip()
+
+    def _resolve_visual_type(self, chart: dict, title: str):
+        """
+        Map a Qlik object to a Power BI visual type.
+
+        Returns (pbi_type, note). `note` is non-empty when the mapping is an
+        approximation or a guess, so the caller can report it instead of the
+        report quietly showing the wrong kind of chart.
+        """
+        qlik_type = str(chart.get("visualization") or chart.get("type") or "").lower()
+        settings = chart.get("settings", {}) or {}
+
+        if qlik_type in self.qlik_to_pbi_map:
+            pbi_type = self.qlik_to_pbi_map[qlik_type]
+
+            # Shape-changing settings Qlik keeps outside the object type.
+            if qlik_type == "piechart" and (settings.get("donut") is True):
+                pbi_type = "donutChart"
+            elif qlik_type == "linechart" and str(settings.get("lineType", "")).lower() == "area":
+                pbi_type = "areaChart"
+            return pbi_type, ""
+
+        if qlik_type == "barchart":
+            horizontal = str(settings.get("orientation", "")).lower() == "horizontal"
+            stacked = str(settings.get("barGrouping", {}).get("grouping", "")
+                          if isinstance(settings.get("barGrouping"), dict)
+                          else settings.get("barGrouping", "")).lower() == "stacked"
+            if horizontal:
+                return ("stackedBarChart" if stacked else "clusteredBarChart"), ""
+            return ("stackedColumnChart" if stacked else "clusteredColumnChart"), ""
+
+        if qlik_type in self.approximated_types:
+            pbi_type, why = self.approximated_types[qlik_type]
+            return pbi_type, "'%s' rendered as %s — %s." % (title or qlik_type, pbi_type, why)
+
+        return "clusteredColumnChart", (
+            "Qlik object type '%s'%s has no known Power BI equivalent; rendered as a "
+            "column chart. Verify it against the Qlik sheet."
+            % (qlik_type or "(unnamed)", " ('%s')" % title if title else "")
+        )
+
     def create_visual(self, chart: dict, x: int, y: int, width: int, height: int) -> dict:
-        self.visual_counter += 1
-        qlik_type = chart.get("type", "").lower()
-        pbi_type = self.qlik_to_pbi_map.get(qlik_type, "clusteredColumnChart")
-        title = chart.get("title", f"Visual {self.visual_counter}")
+        qlik_type = str(chart.get("visualization") or chart.get("type") or "").lower()
+        if qlik_type in self.container_types:
+            # Its children are already flattened onto the sheet by the extractor.
+            return None
+
+        title = self._chart_title(chart)
+        pbi_type, note = self._resolve_visual_type(chart, title)
+        if note:
+            self.fidelity_notes.append(note)
+
         dims = chart.get("dimensions", [])
         meass = chart.get("measures", [])
 
+        query = self._build_query(pbi_type, dims, meass)
+        if query is None:
+            self.fidelity_notes.append(
+                "'%s' (%s) declares no dimensions or measures in the .qvf, so there is "
+                "nothing to project; it was skipped rather than filled with a "
+                "substitute field." % (title or "(untitled)", qlik_type or "unknown")
+            )
+            return None
+
+        self.visual_counter += 1
         visual_name = f"visual_{new_guid().replace('-', '')[:16]}"
-        
+
         visual = {
             "$schema": self.SCHEMA,
             "name": visual_name,
@@ -672,7 +844,7 @@ class UniversalVisualGenerator:
             },
             "visual": {
                 "visualType": pbi_type,
-                "query": self._build_query(pbi_type, dims, meass),
+                "query": query,
                 "objects": {}
             },
         }
@@ -683,7 +855,7 @@ class UniversalVisualGenerator:
                     {
                         "properties": {
                             "show": {"expr": {"Literal": {"Value": "true"}}},
-                            "text": {"expr": {"Literal": {"Value": f"'{title}'"}}}
+                            "text": {"expr": {"Literal": {"Value": "'%s'" % title.replace("'", "''")}}}
                         }
                     }
                 ]
@@ -692,14 +864,27 @@ class UniversalVisualGenerator:
         return visual
 
     def _resolve_col(self, col: str) -> str:
-        """Match a Qlik dimension name to a real migrated column, case-insensitively."""
+        """
+        Match a Qlik dimension name to a real migrated column, case-insensitively.
+
+        When there is no match the first column is still used, because a visual
+        must project something to be valid -- but it is reported. Silently
+        binding a chart labelled 'country' to whatever happens to sit in column
+        zero produces a report that looks right and is wrong.
+        """
         if not self.columns_list:
             return "Column1"
         raw = str(col or "").strip().strip("[]")
         for c in self.columns_list:
             if c.lower() == raw.lower():
                 return c
-        return self.columns_list[0]
+        substitute = self.columns_list[0]
+        self.fidelity_notes.append(
+            "Qlik dimension '%s' has no matching migrated column (it is most likely a "
+            "script-computed field); the visual was bound to '%s' instead and needs "
+            "repointing." % (raw, substitute)
+        )
+        return substitute
 
     def _owner_of(self, col: str) -> str:
         """The table that actually holds this column."""
@@ -741,29 +926,84 @@ class UniversalVisualGenerator:
             table, meas = self.table_name, f"Total {self.table_name} Rows"
         return make_projection(make_measure_ref(table, meas), f"{table}.{meas}")
 
-    def _build_query(self, pbi_type: str, dims: list, meass: list) -> dict:
+    def _build_query(self, pbi_type: str, dims: list, meass: list):
+        """
+        Project every dimension and measure the Qlik chart declares.
+
+        Returns None when the chart declares neither. Previously the first
+        dimension and first measure were the only ones carried over -- a Qlik
+        table with eight measures arrived showing one -- and a chart with none
+        was backfilled with the first column of the table plus a row-count
+        measure, which is how a filter pane became "Total netflix_titles Rows
+        by show_id". A chart with nothing to project is reported, not invented.
+        """
+        dim_fields = [d["field"] for d in dims if d.get("field")]
+        meas_exprs = [m["expression"] for m in meass if m.get("expression")]
+        if not dim_fields and not meas_exprs:
+            return None
+
         query_state = {}
-        default_dim = self._get_default_dim()
-        dim_field = dims[0]["field"] if (dims and dims[0].get("field")) else default_dim
-        meas_expr = meass[0].get("expression") if meass else None
+        if pbi_type in ("slicer", "textbox"):
+            # A slicer takes a single field; Qlik filter panes with several
+            # fields become several slicers in Power BI, which this tool does
+            # not split, so the extras are reported.
+            if not dim_fields:
+                return None
+            if len(dim_fields) > 1:
+                self.fidelity_notes.append(
+                    "Filter pane covered %d fields (%s); Power BI slicers hold one "
+                    "field each, so only '%s' was migrated."
+                    % (len(dim_fields), ", ".join(dim_fields), dim_fields[0])
+                )
+            query_state["Values"] = {"projections": [self._column_projection(dim_fields[0])]}
 
-        if pbi_type == "slicer":
-            query_state["Values"] = {"projections": [self._column_projection(dim_field)]}
         elif pbi_type == "card":
-            query_state["Values"] = {"projections": [self._measure_projection(meas_expr)]}
-        elif pbi_type == "tableEx":
-            projections = []
-            if dims and dims[0].get("field"):
-                projections.append(self._column_projection(dims[0]["field"]))
-            if meas_expr:
-                projections.append(self._measure_projection(meas_expr))
-            if not projections:
-                projections.append(self._column_projection(default_dim))
-            query_state["Values"] = {"projections": projections}
-        else:
-            query_state["Category"] = {"projections": [self._column_projection(dim_field)]}
-            query_state["Y"] = {"projections": [self._measure_projection(meas_expr)]}
+            if not meas_exprs:
+                return None
+            query_state["Values"] = {"projections": [self._measure_projection(meas_exprs[0])]}
 
+        elif pbi_type in ("tableEx", "pivotTable"):
+            projections = [self._column_projection(f) for f in dim_fields]
+            projections += [self._measure_projection(e) for e in meas_exprs]
+            query_state["Values"] = {"projections": projections}
+
+        elif pbi_type == "scatterChart":
+            # X and Y are the first two measures; the dimension is the bubble.
+            if dim_fields:
+                query_state["Details"] = {
+                    "projections": [self._column_projection(f) for f in dim_fields]
+                }
+            if meas_exprs:
+                query_state["X"] = {"projections": [self._measure_projection(meas_exprs[0])]}
+            if len(meas_exprs) > 1:
+                query_state["Y"] = {"projections": [self._measure_projection(meas_exprs[1])]}
+            if len(meas_exprs) > 2:
+                query_state["Size"] = {"projections": [self._measure_projection(meas_exprs[2])]}
+
+        else:
+            # Cartesian charts: first dimension on the axis, any second
+            # dimension becomes the series, all measures on the value axis.
+            if dim_fields:
+                query_state["Category"] = {
+                    "projections": [self._column_projection(dim_fields[0])]
+                }
+            if len(dim_fields) > 1:
+                query_state["Series"] = {
+                    "projections": [self._column_projection(dim_fields[1])]
+                }
+            if len(dim_fields) > 2:
+                self.fidelity_notes.append(
+                    "Chart used %d dimensions (%s); a Power BI cartesian visual takes "
+                    "an axis and a series, so the rest were dropped."
+                    % (len(dim_fields), ", ".join(dim_fields))
+                )
+            if meas_exprs:
+                query_state["Y"] = {
+                    "projections": [self._measure_projection(e) for e in meas_exprs]
+                }
+
+        if not any(v.get("projections") for v in query_state.values()):
+            return None
         return {"queryState": query_state}
 
 
@@ -797,6 +1037,10 @@ class UniversalPBIPGenerator:
         )
         self.table_name = self.model_gen.table_name
 
+        # Built from every field the script mentions. _write_model_bim replaces
+        # this with the columns the partitions genuinely emit, once it knows
+        # them -- binding a visual to a script-derived field would point it at a
+        # column the model does not contain.
         columns_list = [
             f.name for t in self.model_gen.script_tables for f in t.fields
         ] or ["Column1"]
@@ -900,6 +1144,12 @@ class UniversalPBIPGenerator:
     def _write_model_bim(self):
         self._write_json(self.model_dir / "model.bim", self.model_gen.generate())
 
+        # generate() resolves which columns each partition actually emits. Point
+        # the visual generator at those, so a visual can only ever bind to a
+        # column that exists in the model it was written against.
+        self.vis_gen.columns_list = self.model_gen.all_column_names or ["Column1"]
+        self.vis_gen.field_owner = self.model_gen.field_owner
+
     def _write_report_json(self):
         report = {
             "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/report/3.3.0/schema.json",
@@ -948,31 +1198,13 @@ class UniversalPBIPGenerator:
                 title = sheet.get("title", f"Page {i+1}")
                 charts = sheet.get("charts", [])
                 
-                # Auto-arrange charts to fit inside standard 1280x720 canvas without overflow
                 visuals = []
-                n_charts = len(charts)
-                if n_charts <= 2:
-                    cols, rows = 2, 1
-                elif n_charts <= 4:
-                    cols, rows = 2, 2
-                elif n_charts <= 6:
-                    cols, rows = 3, 2
-                elif n_charts <= 9:
-                    cols, rows = 3, 3
-                else:
-                    cols, rows = 4, 3
-
-                chart_w = int((1240 - (cols - 1) * 15) / cols)
-                chart_h = int((680 - (rows - 1) * 15) / rows)
-
-                for idx, chart in enumerate(charts):
-                    col_idx = idx % cols
-                    row_idx = (idx // cols) % rows
-                    x_pos = 20 + col_idx * (chart_w + 15)
-                    y_pos = 20 + row_idx * (chart_h + 15)
-
-                    vis = self.vis_gen.create_visual(chart, x_pos, y_pos, chart_w, chart_h)
-                    visuals.append(vis)
+                for chart, box in self._chart_boxes(sheet, charts):
+                    vis = self.vis_gen.create_visual(chart, *box)
+                    # create_visual returns None for containers and for charts
+                    # that declare nothing to project.
+                    if vis is not None:
+                        visuals.append(vis)
 
                 self._create_page_layout(page_id, title, visuals)
 
@@ -982,6 +1214,88 @@ class UniversalPBIPGenerator:
             "activePageName": page_ids[0]
         }
         self._write_json(self.pages_dir / "pages.json", pages_meta)
+
+    # Power BI's default page, and the margin kept clear around the content.
+    CANVAS_W, CANVAS_H, MARGIN, GUTTER = 1280, 720, 16, 8
+
+    def _chart_boxes(self, sheet: dict, charts: list):
+        """
+        Pair each chart with its (x, y, width, height) on the Power BI canvas.
+
+        A Qlik sheet is a grid -- 24 columns by 12 rows by default -- and every
+        object's col/row/colspan/rowspan is recorded in the sheet's `cells`,
+        keyed by the same id as the chart. Scaling that grid onto the canvas
+        reproduces the author's layout, which is the whole point of a migration.
+
+        Sheets that predate the grid, or objects with no cell, fall back to a
+        packed grid so nothing is lost -- but unlike the previous version that
+        fallback never wraps back onto row 0, which is what stacked visuals on
+        top of each other once a sheet held more than twelve of them.
+        """
+        cells = {c.get("name"): c for c in (sheet.get("cells") or []) if c.get("name")}
+        layout = sheet.get("layout") or {}
+        grid_cols = layout.get("columns") or 24
+        grid_rows = layout.get("rows") or 12
+
+        # A cell may legitimately extend past the declared grid; trust the cells.
+        for cell in cells.values():
+            grid_cols = max(grid_cols, cell.get("col", 0) + cell.get("colspan", 1))
+            grid_rows = max(grid_rows, cell.get("row", 0) + cell.get("rowspan", 1))
+
+        usable_w = self.CANVAS_W - 2 * self.MARGIN
+        usable_h = self.CANVAS_H - 2 * self.MARGIN
+        col_w = usable_w / float(grid_cols)
+        row_h = usable_h / float(grid_rows)
+
+        def box_of(cell):
+            return (self.MARGIN + cell.get("col", 0) * col_w,
+                    self.MARGIN + cell.get("row", 0) * row_h,
+                    max(cell.get("colspan", 1), 1) * col_w,
+                    max(cell.get("rowspan", 1), 1) * row_h)
+
+        placed, unplaced = [], []
+        for chart in charts:
+            cell = cells.get(chart.get("id"))
+            if cell:
+                placed.append((chart, box_of(cell)))
+            else:
+                unplaced.append(chart)
+
+        # An object nested in a container has no cell of its own -- in Qlik it
+        # renders inside the container's area, so its children share that area
+        # here too rather than being exiled to the bottom of the page.
+        by_parent = collections.defaultdict(list)
+        for chart in list(unplaced):
+            parent_cell = cells.get(chart.get("parent"))
+            if parent_cell:
+                by_parent[chart["parent"]].append(chart)
+                unplaced.remove(chart)
+
+        for parent_id, children in by_parent.items():
+            px, py, pw, ph = box_of(cells[parent_id])
+            share = pw / float(len(children))
+            for i, child in enumerate(children):
+                placed.append((child, (px + i * share, py, share, ph)))
+
+        boxes = []
+        for chart, (x, y, w, h) in placed:
+            boxes.append((chart, (int(round(x)), int(round(y)),
+                                  int(round(max(w - self.GUTTER, 40))),
+                                  int(round(max(h - self.GUTTER, 40))))))
+
+        if unplaced:
+            # Pack whatever the sheet did not position into a grid below the
+            # canvas fold; the page scrolls, so they stay reachable and legible.
+            per_row = 3
+            w = int((usable_w - (per_row - 1) * self.GUTTER) / per_row)
+            h = 200
+            start_y = self.CANVAS_H + self.MARGIN if placed else self.MARGIN
+            for idx, chart in enumerate(unplaced):
+                x = self.MARGIN + (idx % per_row) * (w + self.GUTTER)
+                y = start_y + (idx // per_row) * (h + self.GUTTER)
+                boxes.append((chart, (x, y, w, h)))
+
+        return boxes
 
     def _create_page_layout(self, page_id: str, display_name: str, visuals: list):
         page_dir = self.pages_dir / page_id
@@ -1221,6 +1535,34 @@ b'</Types>'
             for u in unresolved:
                 expr = u["expression"].replace("\n", " ").replace("|", "\\|")[:90]
                 lines.append(f"| {u['table']} | `{expr}` |")
+            lines.append("")
+
+        fidelity = list(dict.fromkeys(self.vis_gen.fidelity_notes))
+        if fidelity:
+            lines += [
+                "## Visual fidelity",
+                "",
+                "Each Qlik object was placed using the sheet's own grid position and",
+                "mapped to the closest Power BI visual. The following could not be",
+                "reproduced exactly and are listed so they can be checked against the",
+                "original sheet rather than assumed correct.",
+                "",
+            ]
+            lines += ["- %s" % note for note in fidelity]
+            lines.append("")
+
+        cross_table = sorted(self.model_gen.cross_table_measures)
+        if cross_table:
+            lines += [
+                "## Measures that span tables",
+                "",
+                "Qlik associates tables automatically on shared field names. Power BI",
+                "does not: these measures were repointed at the table that owns each",
+                "column, but they will only return correct values once the matching",
+                "relationships are created in the model.",
+                "",
+            ]
+            lines += ["- `%s`" % m for m in cross_table]
             lines.append("")
 
         if fields and typed_columns == 0:

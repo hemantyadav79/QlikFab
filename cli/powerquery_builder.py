@@ -42,13 +42,43 @@ _TEXT_TAGS = {"$text", "$ascii"}
 
 
 def escape_m_string(value: str) -> str:
-    """Escape a value for embedding in an M string literal."""
-    return str(value).replace('"', '""')
+    """
+    Escape a value for embedding in an M string literal or quoted identifier.
+
+    M has exactly one escape mechanism inside quoted text: `#(...)`. Doubling
+    the quote character is therefore not sufficient on its own --
+
+      * `#(` opens an escape sequence, so a literal `#` that happens to be
+        followed by `(` has to be written `#(#)`. Qlik field names like
+        `Revenue #(000s)` otherwise terminate the literal early and the mashup
+        parser reports a bare "Token ',' expected" from somewhere further down
+        the document.
+      * a raw CR, LF or TAB splits the token across lines, with the same result.
+
+    The `#(` substitution runs first so it cannot re-escape the `#(cr)` /
+    `#(lf)` / `#(tab)` sequences introduced immediately after it.
+    """
+    text = str(value).replace('"', '""')
+    text = text.replace("#(", "#(#)(")
+    return (
+        text.replace("\r", "#(cr)")
+            .replace("\n", "#(lf)")
+            .replace("\t", "#(tab)")
+    )
 
 
 def escape_m_identifier(name: str) -> str:
-    """Quote an identifier for M (#"Name with spaces"). Always quoted to avoid reserved keyword collisions."""
-    return '#"%s"' % escape_m_string(name)
+    """
+    Quote an identifier for M (#"Name with spaces").
+
+    Always quoted, to avoid collisions with reserved keywords. An empty name is
+    not a legal M identifier even when quoted, so it is replaced rather than
+    emitted as `#""` -- a column with no name cannot be referenced anyway, and
+    a placeholder keeps the failure visible in the model instead of breaking
+    the whole mashup document.
+    """
+    escaped = escape_m_string(name)
+    return '#"%s"' % (escaped if escaped else "Column")
 
 
 # ----------------------------------------------------------------------
@@ -216,10 +246,16 @@ def _build_delimited(table, resolver: TypeResolver) -> list:
     source = table.source
     options = source.options or {}
 
+    # A tab delimiter is emitted as the M escape sequence itself, so it goes
+    # into the literal verbatim -- running it through escape_m_string would
+    # turn `#(tab)` into the four-character text `#(tab)`. Every other
+    # delimiter is user data and is escaped normally.
     delimiter = options.get("delimiter", ",")
     if delimiter is True:
         delimiter = ","
-    delimiter = {"\\t": "#(tab)", "tab": "#(tab)"}.get(str(delimiter).lower(), str(delimiter))
+    delimiter = str(delimiter)
+    tab_escape = {"\\t": "#(tab)", "tab": "#(tab)", "\t": "#(tab)"}
+    delimiter = tab_escape.get(delimiter.lower()) or escape_m_string(delimiter)
 
     codepage = str(options.get("codepage", "")).strip()
     encoding = ", Encoding = %s" % codepage if codepage in _KNOWN_CODEPAGES else ""
@@ -231,7 +267,7 @@ def _build_delimited(table, resolver: TypeResolver) -> list:
         "    Source = Csv.Document(",
         "        File.Contents(%s)," % _path_expression(source),
         '        [Delimiter = "%s", QuoteStyle = QuoteStyle.Csv%s]'
-        % (escape_m_string(delimiter), encoding),
+        % (delimiter, encoding),
         "    ),",
     ]
 

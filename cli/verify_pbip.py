@@ -26,6 +26,33 @@ FABRICATED = [
     "Alpha Store", "Beta Retail", "Gamma Express",
 ]
 
+# The only escape mechanism M offers inside quoted text. Anything else after a
+# `#(` is the parser reading past the end of the literal.
+_M_ESCAPES = {'#)', '#(', 'cr)', 'lf)', 'tab)'}
+
+
+def bad_m_literals(expr):
+    """
+    Unescaped `#(`, raw control characters, and empty identifiers inside M
+    string literals and quoted identifiers.
+
+    Fabric rejects the whole mashup document for any one of these, and the
+    error it returns ("Token ',' expected") names neither the table nor the
+    column, so the failure is far cheaper to catch here.
+    """
+    problems = []
+    for literal in re.findall(r'#?"((?:[^"]|"")*)"', expr):
+        for hit in re.finditer(r'#\(', literal):
+            tail = literal[hit.end():hit.end() + 4]
+            if not any(tail.startswith(e) for e in _M_ESCAPES):
+                problems.append(f'unescaped "#(" in M literal {literal[:60]!r}')
+        if any(ch in literal for ch in '\r\n\t'):
+            problems.append(f'raw control character in M literal {literal[:60]!r}')
+    if '#""' in expr:
+        problems.append('empty quoted identifier #"" in M expression')
+    return problems
+
+
 def check(project_dir):
     fails, warns = [], []
     name = os.path.basename(project_dir)
@@ -36,12 +63,15 @@ def check(project_dir):
     bim = json.load(open(bim_paths[0], encoding='utf-8'))
     model = bim['model']
 
-    defined = {}   # table -> set(columns)
-    measures = {}  # table -> set(measures)
-    for t in model['tables']:
-        defined[t['name']] = {c['name'] for c in t.get('columns', [])}
-        measures[t['name']] = {m['name'] for m in t.get('measures', [])}
+    # Both maps are completed before anything is validated against them. A
+    # measure may legitimately reference a table declared later in the file,
+    # and checking mid-pass reported those as missing.
+    defined = {t['name']: {c['name'] for c in t.get('columns', [])}
+               for t in model['tables']}          # table -> set(columns)
+    measures = {t['name']: {m['name'] for m in t.get('measures', [])}
+                for t in model['tables']}         # table -> set(measures)
 
+    for t in model['tables']:
         for p in t.get('partitions', []):
             expr = p['source']['expression']
             expr = expr if isinstance(expr, str) else '\n'.join(expr)
@@ -50,6 +80,9 @@ def check(project_dir):
             for token in FABRICATED:
                 if token in expr:
                     fails.append(f'{name}/{t["name"]}: fabricated data token {token!r} in partition')
+
+            for problem in bad_m_literals(expr):
+                fails.append(f'{name}/{t["name"]}: {problem}')
 
             # Columns the partition emits must match the declared columns.
             sel = re.search(r'Table\.SelectColumns\([^,]+,\s*\{(.*?)\},', expr, re.S)
