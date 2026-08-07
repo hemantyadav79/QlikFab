@@ -428,6 +428,14 @@ class ReusableServer(socketserver.ThreadingTCPServer):
 
 
 if __name__ == "__main__":
+    # Work dirs from earlier server processes can never be reached again — the
+    # run store is in memory — so they are swept at boot rather than left to
+    # accumulate until the volume fills.
+    swept, freed = engine_runner.sweep_orphaned_work_dirs()
+    if swept:
+        print("Cleanup          removed %d abandoned work dir(s), freed %s"
+              % (swept, engine_runner.human_bytes(freed)))
+
     with ReusableServer(("localhost", PORT), MigrationUIHandler) as httpd:
         print("Migration UI on  http://localhost:%d" % PORT)
         print("Qlik proxy at    http://localhost:%d%s?target=<tenant url>" % (PORT, PROXY_PATH))
