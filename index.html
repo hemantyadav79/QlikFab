@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qlik → Power BI | Autonomous Migration Platform</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- SIDEBAR NAVIGATION -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo-icon"><i class="fa-solid fa-bolt-lightning"></i></div>
+                <div class="logo-text">Qlik <span>→</span> Power BI</div>
+            </div>
+            <div class="nav-section-title">NAVIGATE</div>
+            <nav class="nav-menu">
+                <a href="#run-migration" class="nav-item" data-tab="tab-run">Run migration</a>
+                
+                <div class="accordion-item active">
+                    <a href="#agents" class="nav-item accordion-header active" data-tab="tab-agents-overview">
+                        Agents <i class="fa-solid fa-chevron-up"></i>
+                    </a>
+                    <div class="accordion-body" style="display: block;">
+                        <a href="#assessment" class="nav-sub-item" data-tab="tab-assessment">
+                            <span class="dot dot-blue"></span> Assessment <span class="badge-idle">IDLE</span>
+                        </a>
+                        <a href="#parsing" class="nav-sub-item" data-tab="tab-review">
+                            <span class="dot dot-cyan"></span> Parsing <span class="badge-idle">IDLE</span>
+                        </a>
+                        <a href="#mapping" class="nav-sub-item" data-tab="tab-mapping">
+                            <span class="dot dot-purple"></span> Mapping <span class="badge-idle">IDLE</span>
+                        </a>
+                        <a href="#report-gen" class="nav-sub-item" data-tab="tab-artifacts">
+                            <span class="dot dot-green"></span> Report Generation <span class="badge-idle">IDLE</span>
+                        </a>
+                    </div>
+                </div>
+
+                <a href="#logs" class="nav-item" data-tab="tab-logs">Logs</a>
+                <a href="#summary" class="nav-item" data-tab="tab-summary">Summary</a>
+                <a href="#job-history" class="nav-item" data-tab="tab-history">Migration history</a>
+            </nav>
+        </aside>
+
+        <!-- MAIN CONTENT AREA -->
+        <main class="main-content">
+            <!-- TOP HEADER -->
+            <header class="top-header">
+                <div class="header-titles">
+                    <h1>Qlik <span>→</span> Power BI</h1>
+                    <p>Autonomous migration platform</p>
+                </div>
+                <div class="header-actions">
+                    <div class="theme-toggle">
+                        <button class="theme-btn active" id="btn-light"><i class="fa-solid fa-sun"></i> Light</button>
+                        <button class="theme-btn" id="btn-dark"><i class="fa-solid fa-moon"></i> Dark</button>
+                    </div>
+                </div>
+            </header>
+
+            <!-- TAB: AGENTS OVERVIEW (DEFAULT) -->
+            <section id="tab-agents-overview" class="tab-pane active">
+                <div class="section-title">
+                    <h2>Migration engine phases</h2>
+                    <p>The engine in <code>cli/ai_qvf_to_powerbi.py</code> runs these four phases over the .qvf binary. Open one to see its KPIs, output tables and the log lines that phase really printed.</p>
+                </div>
+
+                <div class="phases-grid">
+                    <div class="phase-card" onclick="document.querySelector('[data-tab=\'tab-assessment\']').click()">
+                        <div class="phase-icon icon-blue"><i class="fa-solid fa-user-shield"></i></div>
+                        <div class="phase-number">PHASE 1</div>
+                        <h3>Assessment</h3>
+                        <p>Reads the .qvf binary: load script, schema and sheet inventory</p>
+                        <div class="phase-footer">
+                            <span class="badge-idle">IDLE</span>
+                            <span class="open-link">Open <i class="fa-solid fa-arrow-right"></i></span>
+                        </div>
+                    </div>
+
+                    <div class="phase-card" onclick="document.querySelector('[data-tab=\'tab-review\']').click()">
+                        <div class="phase-icon icon-cyan"><i class="fa-solid fa-share-nodes"></i></div>
+                        <div class="phase-number">PHASE 2</div>
+                        <h3>Parsing</h3>
+                        <p>Builds model.bim — tables, columns and DAX measures</p>
+                        <div class="phase-footer">
+                            <span class="badge-idle">IDLE</span>
+                            <span class="open-link">Open <i class="fa-solid fa-arrow-right"></i></span>
+                        </div>
+                    </div>
+
+                    <div class="phase-card" onclick="document.querySelector('[data-tab=\'tab-mapping\']').click()">
+                        <div class="phase-icon icon-purple"><i class="fa-solid fa-brain"></i></div>
+                        <div class="phase-number">PHASE 3</div>
+                        <h3>Mapping</h3>
+                        <p>Lays out report pages and visuals</p>
+                        <div class="phase-footer">
+                            <span class="badge-idle">IDLE</span>
+                            <span class="open-link">Open <i class="fa-solid fa-arrow-right"></i></span>
+                        </div>
+                    </div>
+
+                    <div class="phase-card" onclick="document.querySelector('[data-tab=\'tab-artifacts\']').click()">
+                        <div class="phase-icon icon-green"><i class="fa-solid fa-box-open"></i></div>
+                        <div class="phase-number">PHASE 4</div>
+                        <h3>Report Generation</h3>
+                        <p>Writes .pbit, the audit report and the PBIP bundle</p>
+                        <div class="phase-footer">
+                            <span class="badge-idle">IDLE</span>
+                            <span class="open-link">Open <i class="fa-solid fa-arrow-right"></i></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-title" style="margin-top: 48px;">
+                    <h2>Generated Power BI Artifacts (Downloads)</h2>
+                    <p>Standalone templates, Power BI projects, and audit logs ready for download.</p>
+                </div>
+                
+                <div class="artifacts-grid">
+                    <div class="artifact-card card-green">
+                        <div class="art-icon" style="color: #10b981;"><i class="fa-solid fa-folder-tree"></i></div>
+                        <div class="art-details">
+                            <h3 id="artifact-pbip-title-main">PowerBI_Project.pbip <span class="tag-badge-green">★ RECOMMENDED</span></h3>
+                            <p><b>100% Data & Visuals Included!</b> Full Microsoft Fabric PBIP Project with 100 rows of data and KPI Charts.</p>
+                        </div>
+                        <button class="btn-download btn-success" id="artifact-pbip-btn-main">
+                            <i class="fa-solid fa-download"></i> Download .PBIP (Full Data)
+                        </button>
+                    </div>
+
+                    <div class="artifact-card">
+                        <div class="art-icon" style="color: #3b82f6;"><i class="fa-solid fa-file-powerpoint"></i></div>
+                        <div class="art-details">
+                            <h3 id="artifact-pbit-title-main">Template.pbit</h3>
+                            <p>Standalone Power BI Template file (Schema & metadata structure without offline rows).</p>
+                        </div>
+                        <button class="btn-download btn-outline-blue" id="artifact-pbit-btn-main">
+                            <i class="fa-solid fa-download"></i> Download .PBIT (Template)
+                        </button>
+                    </div>
+
+                    <div class="artifact-card">
+                        <div class="art-icon" style="color: #3b82f6;"><i class="fa-solid fa-file-shield"></i></div>
+                        <div class="art-details">
+                            <h3>MIGRATION_AUDIT_REPORT.md</h3>
+                            <p>Executive compliance audit report generated by AutoGen Orchestrator.</p>
+                        </div>
+                        <button class="btn-download btn-outline-grey" id="artifact-audit-btn-main">
+                            <i class="fa-regular fa-file-lines"></i> Open Audit Report
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: RUN MIGRATION -->
+            <section id="tab-run" class="tab-pane">
+                <div class="qlik-cloud-container">
+                    <div class="qlik-cloud-card">
+                        <h2><i class="fa-solid fa-cloud"></i> Connect to Qlik Cloud</h2>
+                        
+                        <div class="neumorphic-input-group">
+                            <label>Tenant URL</label>
+                            <input type="text" id="qlik-tenant-url" class="neumorphic-input" placeholder="https://your-tenant.region.qlikcloud.com">
+                        </div>
+                        
+                        <div class="neumorphic-input-group">
+                            <label>API Key (Bearer Token)</label>
+                            <input type="password" id="qlik-api-key" class="neumorphic-input" placeholder="eyJhbGciOiJIUzI1...">
+                        </div>
+                        
+                        <p class="qlik-cloud-helper">
+                            Create the key in the Qlik Management Console under <b>API keys</b>. Paste the token only — no Bearer prefix. For the browser to reach your tenant, add this app's origin under <b>Management Console</b> &rarr; <b>Content Security Policy</b>.
+                        </p>
+                        
+                        <button id="btn-test-connection" class="neumorphic-btn">Test Connection</button>
+
+                        <!-- HIDDEN AFTER CONNECTION: App Selection -->
+                        <div id="qlik-cloud-apps-section" style="display: none; margin-top: 32px; padding-top: 24px; border-top: 1px dashed #e8e2d5;">
+                            <h3 style="font-size: 15px; color: #10b981; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+                                <i class="fa-solid fa-check-circle"></i> Connection Successful!
+                            </h3>
+                            <div class="neumorphic-input-group">
+                                <label>Select Qlik Apps to Migrate (Hold Ctrl/Cmd to select multiple)</label>
+                                <select id="qlik-cloud-app-select" class="neumorphic-input" multiple style="height: 120px; padding: 10px;">
+                                    <!-- Options injected by JS after connection -->
+                                </select>
+                            </div>
+                            <button id="btn-cloud-migrate" class="btn-primary-block" style="margin-top: 16px; display: none;">Start Autonomous Batch Migration</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: ASSESSMENT (Phase 1) -->
+            <section id="tab-assessment" class="tab-pane">
+                <div class="section-title">
+                    <h2>Phase 1: Assessment</h2>
+                    <p>Dynamic pre-migration analysis generated by AutoGen <code>AssessmentAgent</code> for <b id="assess-target-name">Helpdesk Management.qvf</b></p>
+                </div>
+                
+                <div class="kpi-row">
+                    <div class="kpi-box">
+                        <span class="kpi-label">Report App Name</span>
+                        <b class="kpi-value" id="kpi-app-name">Helpdesk Management</b>
+                        <span class="kpi-sub">Dynamic QVF Title</span>
+                    </div>
+                    <div class="kpi-box">
+                        <span class="kpi-label">Extracted Fields</span>
+                        <b class="kpi-value" id="kpi-fields-cnt">33 Columns</b>
+                        <span class="kpi-sub">100% Dynamic Schema</span>
+                    </div>
+                    <div class="kpi-box">
+                        <span class="kpi-label">Sheets & Visuals</span>
+                        <b class="kpi-value" id="kpi-visuals-cnt">2 Sheets / 10 Charts</b>
+                        <span class="kpi-sub">Parsed from Load Script</span>
+                    </div>
+                    <div class="kpi-box">
+                        <span class="kpi-label">PII Risk Detection</span>
+                        <b class="kpi-value success-text">None Detected</b>
+                        <span class="kpi-sub">Safe for Power BI Catalog</span>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <h3>Extracted Sheets & Chart Inventory</h3>
+                    <table class="custom-table">
+                        <thead>
+                            <tr>
+                                <th>Sheet Name</th>
+                                <th>Chart Type</th>
+                                <th>Visual Title</th>
+                                <th>Dimensions</th>
+                                <th>Measures</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="assessment-tbody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- TAB: REVIEW QUEUE (Phase 2 Parsing) -->
+            <section id="tab-review" class="tab-pane">
+                <div class="section-title">
+                    <h2>Phase 2: Parsing & DAX Translation</h2>
+                    <p>Inspect and approve LLM-translated DAX expressions for <b id="review-target-name">Helpdesk Management</b></p>
+                </div>
+                
+                <div class="table-container">
+                    <table class="custom-table">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" checked></th>
+                                <th>Qlik Expression / Metric Column</th>
+                                <th>Translated DAX Formula</th>
+                                <th>LLM Confidence</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="review-tbody"></tbody>
+                    </table>
+                </div>
+                <div class="action-bar">
+                    <button class="btn-primary-block" style="width: auto; padding: 12px 28px;">
+                        <i class="fa-solid fa-check"></i> Approve All DAX Translations
+                    </button>
+                </div>
+            </section>
+
+            <!-- TAB: MAPPING (Phase 3) -->
+            <section id="tab-mapping" class="tab-pane">
+                <div class="section-title">
+                    <h2>Phase 3: Mapping</h2>
+                    <p>Lays out report pages and visuals dynamically based on the parsed models.</p>
+                </div>
+                <div class="info-card-blue">
+                    <i class="fa-solid fa-circle-check"></i>
+                    <p>All visuals have been successfully mapped to Power BI core visual types.</p>
+                </div>
+            </section>
+
+            <!-- TAB: ARTIFACTS (Phase 4 Report Gen) -->
+            <section id="tab-artifacts" class="tab-pane">
+                <div class="section-title">
+                    <h2>Phase 4: Generated Power BI Artifacts</h2>
+                    <p>All standalone templates, Power BI projects, and audit logs stored in <code id="artifact-dir-subtitle">Helpdesk_PowerBI_Project/</code></p>
+                </div>
+                
+                <div class="artifacts-grid">
+                    <div class="artifact-card card-green">
+                        <div class="art-icon" style="color: #10b981;"><i class="fa-solid fa-folder-tree"></i></div>
+                        <div class="art-details">
+                            <h3 id="artifact-pbip-title">PowerBI_Project.pbip <span class="tag-badge-green">★ RECOMMENDED</span></h3>
+                            <p><b>100% Data & Visuals Included!</b> Full Microsoft Fabric PBIP Project with 100 rows of data and KPI Charts.</p>
+                        </div>
+                        <button class="btn-download btn-success" id="artifact-pbip-btn">
+                            <i class="fa-solid fa-download"></i> Download .PBIP (Full Data)
+                        </button>
+                    </div>
+
+                    <div class="artifact-card">
+                        <div class="art-icon" style="color: #3b82f6;"><i class="fa-solid fa-file-powerpoint"></i></div>
+                        <div class="art-details">
+                            <h3 id="artifact-pbit-title">Template.pbit</h3>
+                            <p>Standalone Power BI Template file (Schema & metadata structure without offline rows).</p>
+                        </div>
+                        <button class="btn-download btn-outline-blue" id="artifact-pbit-btn">
+                            <i class="fa-solid fa-download"></i> Download .PBIT (Template)
+                        </button>
+                    </div>
+
+                    <div class="artifact-card">
+                        <div class="art-icon" style="color: #3b82f6;"><i class="fa-solid fa-file-shield"></i></div>
+                        <div class="art-details">
+                            <h3>MIGRATION_AUDIT_REPORT.md</h3>
+                            <p>Executive compliance audit report generated by AutoGen Orchestrator.</p>
+                        </div>
+                        <button class="btn-download btn-outline-grey" id="artifact-audit-btn">
+                            <i class="fa-regular fa-file-lines"></i> Open Audit Report
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: JOB HISTORY -->
+            <section id="tab-history" class="tab-pane">
+                <div class="section-title">
+                    <h2>Migration History</h2>
+                    <p>Audit trail of all Microsoft AutoGen multi-agent execution runs</p>
+                </div>
+                <div class="table-container">
+                    <table class="custom-table">
+                        <thead>
+                            <tr>
+                                <th>Job ID</th>
+                                <th>Target File</th>
+                                <th>Sheets</th>
+                                <th>Visuals</th>
+                                <th>Execution Time</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody"></tbody>
+                    </table>
+                </div>
+            </section>
+            
+            <!-- TAB: LOGS -->
+            <section id="tab-logs" class="tab-pane">
+                <div class="section-title">
+                    <h2>Execution Logs</h2>
+                    <p>Console output from the AI Agents.</p>
+                </div>
+                <div class="autogen-console-card">
+                    <div class="console-header">
+                        <div class="console-title"><i class="fa-solid fa-robot"></i> Multi-Agent Execution</div>
+                        <div class="console-status"><span class="pulse-dot"></span> IDLE</div>
+                    </div>
+                    <div class="console-logs" id="console-logs-body">
+                        <div>[SYSTEM] Ready for new migration tasks.</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: SUMMARY -->
+            <section id="tab-summary" class="tab-pane">
+                <div class="section-title">
+                    <h2>Platform Summary</h2>
+                    <p>High-level metrics across all jobs.</p>
+                </div>
+                <div class="kpi-row">
+                    <div class="kpi-box">
+                        <span class="kpi-label">Total Migrated Files</span>
+                        <b class="kpi-value" id="summary-total-apps">0 Apps</b>
+                    </div>
+                    <div class="kpi-box">
+                        <span class="kpi-label">Total DAX Measures</span>
+                        <b class="kpi-value" id="summary-total-dax">0</b>
+                    </div>
+                    <div class="kpi-box">
+                        <span class="kpi-label">Average Accuracy</span>
+                        <b class="kpi-value success-text" id="summary-avg-accuracy">--</b>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <script src="script.js?v=20260809"></script>
+</body>
+</html>

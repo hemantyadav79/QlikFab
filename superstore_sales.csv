@@ -1,0 +1,31 @@
+OrderID,OrderDate,CustomerName,Region,Category,SubCategory,Sales,Profit,Quantity
+ORD-1001,2026-01-05,Aarav Sharma,North,Electronics,Laptops,75000,12000,1
+ORD-1002,2026-01-06,Riya Verma,West,Furniture,Chairs,12500,2500,4
+ORD-1003,2026-01-07,Kabir Kapoor,South,Electronics,Smartphones,45000,8000,2
+ORD-1004,2026-01-08,Ananya Iyer,East,Office Supplies,Printers,18000,3200,1
+ORD-1005,2026-01-10,Rohan Gupta,North,Clothing,Jackets,8500,1700,3
+ORD-1006,2026-01-11,Sanya Mehta,West,Electronics,Laptops,82000,15000,1
+ORD-1007,2026-01-12,Vikram Singh,South,Furniture,Desks,24000,4000,2
+ORD-1008,2026-01-14,Pooja Nair,East,Clothing,Footwear,6200,1200,2
+ORD-1009,2026-01-15,Arjun Das,North,Office Supplies,Monitors,16500,3000,1
+ORD-1010,2026-01-17,Meera Joshi,West,Electronics,Tablets,32000,6000,2
+ORD-1011,2026-01-18,Nikhil Rao,South,Furniture,Chairs,15000,3000,6
+ORD-1012,2026-01-19,Tanvi Patel,East,Electronics,Smartphones,51000,9500,1
+ORD-1013,2026-01-21,Kunal Malhotra,North,Clothing,Jackets,11000,2200,2
+ORD-1014,2026-01-22,Ishita Saxena,West,Office Supplies,Printers,21000,4100,1
+ORD-1015,2026-01-24,Pranav Reddy,South,Electronics,Laptops,91000,18000,1
+ORD-1016,2026-01-25,Simran Kaur,East,Furniture,Desks,28000,5200,1
+ORD-1017,2026-01-27,Aditya Bhatt,North,Electronics,Tablets,29000,5500,1
+ORD-1018,2026-01-28,Neha Choudhary,West,Clothing,Footwear,9500,1900,3
+ORD-1019,2026-01-30,Harsh Vardhan,South,Office Supplies,Monitors,14000,2500,1
+ORD-1020,2026-02-01,Divya Kulkarni,East,Electronics,Laptops,68000,11000,1
+ORD-1021,2026-02-02,Siddharth Jain,North,Furniture,Chairs,18500,3700,5
+ORD-1022,2026-02-04,Kritika Bansal,West,Electronics,Smartphones,48000,8500,2
+ORD-1023,2026-02-05,Lakshya Ghosh,South,Clothing,Jackets,13500,2700,3
+ORD-1024,2026-02-07,Shreya Sen,East,Office Supplies,Printers,19500,3800,1
+ORD-1025,2026-02-09,Dhruv Pillai,North,Electronics,Laptops,88000,16500,1
+ORD-1026,2026-02-10,Aadya Mishra,West,Furniture,Desks,26000,4800,2
+ORD-1027,2026-02-12,Manav Sinha,South,Electronics,Tablets,35000,6800,2
+ORD-1028,2026-02-14,Tara Deshmukh,East,Clothing,Footwear,7800,1500,2
+ORD-1029,2026-02-15,Chirag Pandey,North,Office Supplies,Monitors,17500,3200,1
+ORD-1030,2026-02-17,Kiara Shetty,West,Electronics,Smartphones,53000,9800,1
