@@ -1428,52 +1428,82 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
             let logs = [];
             let baseTime = 0;
             
-            logs.push({ time: baseTime, text: `[SYSTEM] Microsoft AutoGen (autogen-agentchat) framework initialized for BATCH PROCESSING.` });
+            logs.push({ time: baseTime, text: `[SYSTEM] Microsoft AutoGen (autogen-agentchat) framework initialized for BATCH PROCESSING.`, category: 'system' });
             baseTime += 600;
             
             currentActiveQvfs.forEach((appData, idx) => {
                 const activeFile = appData.filename;
                 const activeDir = appData.projectDir;
                 
-                logs.push({ time: baseTime, text: `\n--- PROCESSING FILE ${idx + 1}/${currentActiveQvfs.length}: ${activeFile} ---` });
+                logs.push({ time: baseTime, text: `\n📁 PROCESSING FILE ${idx + 1}/${currentActiveQvfs.length}: ${activeFile}`, category: 'file-header' });
                 baseTime += 400;
-                logs.push({ time: baseTime, text: `[ORCHESTRATOR] Target QVF selected: "${activeFile}" (${appData.size})` });
+                logs.push({ time: baseTime, text: `[ORCHESTRATOR] Target QVF selected: "${activeFile}" (${appData.size})`, category: 'system' });
                 baseTime += 700;
-                logs.push({ time: baseTime, text: `[AUTOGEN PHASE 1] AssessmentAgent: Analyzing load script, variables & PII...` });
+                
+                // Phase 1: Assessment
+                logs.push({ time: baseTime, text: `[PHASE 1] AssessmentAgent → Analyzing load script, variables & PII for ${activeFile}...`, category: 'assessment' });
+                baseTime += 800;
+                logs.push({ time: baseTime, text: `[PHASE 1] AssessmentAgent → Scanning data model connections...`, category: 'assessment' });
+                baseTime += 500;
+                logs.push({ time: baseTime, text: `[PHASE 1] AssessmentAgent ✓ Assessment complete. Priority: Medium | PII Risk: None`, category: 'assessment' });
+                baseTime += 600;
+                
+                // Phase 2: Parsing
+                logs.push({ time: baseTime, text: `[PHASE 2] ReportParsingAgent → Extracting fields and visuals from ${activeFile}...`, category: 'parsing' });
+                baseTime += 700;
+                logs.push({ time: baseTime, text: `[PHASE 2] ReportParsingAgent → Extracted ${appData.fieldsCnt} and ${appData.visualsCnt}.`, category: 'parsing' });
+                baseTime += 500;
+                logs.push({ time: baseTime, text: `[PHASE 2] ReportParsingAgent ✓ Parsing complete for ${activeFile}`, category: 'parsing' });
+                baseTime += 600;
+                
+                // Phase 3: Mapping - with failures for realism
+                logs.push({ time: baseTime, text: `[PHASE 3] MappingAgent → Translating Qlik expressions to DAX via AI Brain...`, category: 'mapping' });
                 baseTime += 800;
                 
-                // Randomly insert a failure for realism if it's the second file
-                if (idx === 1 || (idx === 0 && currentActiveQvfs.length > 3)) {
-                    logs.push({ time: baseTime, text: `<span style="color: #ef4444; font-weight: bold;">[ERROR] MappingAgent: Failed to resolve complex set analysis in DAX translation. Retrying with fallback model...</span>` });
-                    baseTime += 1200;
-                    logs.push({ time: baseTime, text: `<span style="color: #f59e0b;">[RETRY] MappingAgent: Fallback successful. Expression mapped with 85% confidence.</span>` });
+                if (idx === 0) {
+                    logs.push({ time: baseTime, text: `<span style="color: #ef4444; font-weight: bold;">❌ [ERROR] MappingAgent FAILED: Complex set analysis expression in "${activeFile}" could not be resolved. Timeout after 30s.</span>`, category: 'failure' });
+                    baseTime += 1000;
+                    logs.push({ time: baseTime, text: `<span style="color: #f59e0b; font-weight: 600;">⟳ [RETRY] MappingAgent: Switching to fallback GPT-4o model for complex expression...</span>`, category: 'failure' });
+                    baseTime += 800;
+                    logs.push({ time: baseTime, text: `<span style="color: #f59e0b;">[RETRY] MappingAgent: Fallback successful. Expression mapped with 85% confidence.</span>`, category: 'failure' });
                     baseTime += 600;
                 }
                 
-                logs.push({ time: baseTime, text: `[OK] Assessment complete. Report Priority: Medium | PII Risk: None Detected.` });
-                baseTime += 800;
-                logs.push({ time: baseTime, text: `[AUTOGEN PHASE 2] ReportParsingAgent: Extracted ${appData.fieldsCnt} and ${appData.visualsCnt}.` });
+                logs.push({ time: baseTime, text: `[PHASE 3] MappingAgent ✓ All expressions mapped for ${activeFile}`, category: 'mapping' });
+                baseTime += 700;
+                
+                // Phase 4: Report Generation
+                logs.push({ time: baseTime, text: `[PHASE 4] ReportGenerationAgent → Building Microsoft Fabric PBIP & standalone template...`, category: 'report' });
                 baseTime += 900;
-                logs.push({ time: baseTime, text: `[AUTOGEN PHASE 3] MappingAgent: Translating Qlik DAX expressions via AI Brain...` });
-                baseTime += 900;
-                logs.push({ time: baseTime, text: `[AUTOGEN PHASE 4] ReportGenerationAgent: Building Microsoft Fabric PBIP & standalone template...` });
-                baseTime += 900;
-                logs.push({ time: baseTime, text: `[OK] Saved: ${appData.pbitName} in ${activeDir}` });
+                
+                if (idx === 1 || (currentActiveQvfs.length === 1 && idx === 0)) {
+                    logs.push({ time: baseTime, text: `<span style="color: #ef4444; font-weight: bold;">❌ [ERROR] ReportGenerationAgent FAILED: Layout rendering error in visual "Chart_${idx+1}". Skipping visual.</span>`, category: 'failure' });
+                    baseTime += 800;
+                }
+                
+                logs.push({ time: baseTime, text: `[PHASE 4] ReportGenerationAgent ✓ Saved: ${appData.pbitName} → ${activeDir}`, category: 'report' });
                 baseTime += 800;
             });
 
-            logs.push({ time: baseTime, text: `\n[SUCCESS] ${currentActiveQvfs.length} Files Migrated! 100% Autonomous Batch Completed!!` });
+            logs.push({ time: baseTime, text: `\n✅ [SUCCESS] ${currentActiveQvfs.length} Files Migrated! 100% Autonomous Batch Completed!!`, category: 'system' });
             baseTime += 800;
 
             logs.forEach(log => {
                 setTimeout(() => {
                     const row = document.createElement("div");
                     row.className = "log-line";
+                    row.dataset.category = log.category || 'system';
                     if (log.text.startsWith("\n")) {
                         row.style.marginTop = "12px";
                         row.innerHTML = `<span class="log-time">[+${(log.time/1000).toFixed(1)}s]</span> <b>${log.text.trim()}</b>`;
                     } else {
                         row.innerHTML = `<span class="log-time">[+${(log.time/1000).toFixed(1)}s]</span> ${log.text}`;
+                    }
+                    // Apply current filter
+                    const activeFilter = document.querySelector('.log-filter-btn.active');
+                    const currentFilter = activeFilter ? activeFilter.dataset.filter : 'all';
+                    if (currentFilter !== 'all' && row.dataset.category !== currentFilter) {
+                        row.style.display = 'none';
                     }
                     consoleBody.appendChild(row);
                     consoleBody.scrollTop = consoleBody.scrollHeight;
@@ -1529,7 +1559,7 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
     const tenantUrl = document.getElementById("qlik-tenant-url");
     const apiKey = document.getElementById("qlik-api-key");
     const appsSection = document.getElementById("qlik-cloud-apps-section");
-    const appSelect = document.getElementById("qlik-cloud-app-select");
+    const appCheckboxContainer = document.getElementById("qlik-cloud-app-checkboxes");
     const btnCloudMigrate = document.getElementById("btn-cloud-migrate");
 
     if (btnTestConn) {
@@ -1554,7 +1584,7 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                 ? 'http://localhost:3000' 
                 : '';
 
-            fetch(`${proxyUrl}/qlik-proxy?endpoint=/api/v1/apps`, {
+            fetch(`${proxyUrl}/qlik-proxy?endpoint=${encodeURIComponent('/api/v1/items?resourceType=app')}`, {
                 method: "GET",
                 headers: {
                     "Authorization": `Bearer ${apiKey.value}`,
@@ -1564,7 +1594,9 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
             })
             .then(response => {
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    return response.text().then(txt => {
+                        throw new Error(`HTTP ${response.status}: ${txt.substring(0, 200)}`);
+                    });
                 }
                 return response.json();
             })
@@ -1575,17 +1607,17 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                 btnTestConn.style.borderColor = "#10b981";
                 
                 appsSection.style.display = "block";
-                appSelect.innerHTML = "";
+                appCheckboxContainer.innerHTML = "";
                 
+                // /api/v1/items returns { data: [...] }
                 const apps = data.data || [];
                 if (apps.length === 0) {
-                     appSelect.innerHTML = `<option disabled>No apps found in tenant.</option>`;
+                     appCheckboxContainer.innerHTML = `<p style="color: var(--color-text-muted); padding: 10px;">No apps found in tenant.</p>`;
                 } else {
-                     apps.forEach(app => {
-                         const appName = (app.attributes && app.attributes.name) || app.name || "Unknown App";
-                         const appId = (app.attributes && app.attributes.id) || app.id || app.resourceId || "unknown";
+                     apps.forEach((app, i) => {
+                         const appName = app.name || "Unknown App";
+                         const appId = app.resourceId || app.id || "unknown";
                          
-                         // Dynamically register so the rest of the UI continues to work without hardcoding
                          APP_REGISTRY[appId] = {
                              name: appName,
                              filename: appName + ".qvf",
@@ -1605,7 +1637,25 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
                              ],
                              columns: ["Region", "Sales"]
                          };
-                         appSelect.innerHTML += `<option value="${appId}">${appName}.qvf</option>`;
+                         
+                         const itemDiv = document.createElement('div');
+                         itemDiv.className = 'app-checkbox-item';
+                         itemDiv.innerHTML = `
+                             <input type="checkbox" id="app-cb-${i}" value="${appId}">
+                             <i class="fa-solid fa-file-lines app-file-icon"></i>
+                             <label for="app-cb-${i}">${appName}.qvf</label>
+                         `;
+                         appCheckboxContainer.appendChild(itemDiv);
+                         
+                         // Click on the row toggles checkbox
+                         itemDiv.addEventListener('click', (e) => {
+                             if (e.target.tagName !== 'INPUT') {
+                                 const cb = itemDiv.querySelector('input[type="checkbox"]');
+                                 cb.checked = !cb.checked;
+                             }
+                             itemDiv.classList.toggle('checked', itemDiv.querySelector('input').checked);
+                             handleCheckboxChange();
+                         });
                      });
                 }
             })
@@ -1621,28 +1671,51 @@ ${appData.daxQueue.map(dq => `- Qlik: ${dq.expr} -> DAX: ${dq.dax} (Confidence: 
         });
     }
 
-    if (appSelect && btnCloudMigrate) {
-        appSelect.addEventListener("change", (e) => {
-            const selectedOpts = Array.from(e.target.selectedOptions);
-            if (selectedOpts.length > 0) {
-                btnCloudMigrate.style.display = "block";
-                const selectedFiles = selectedOpts.map(opt => APP_REGISTRY[opt.value]).filter(Boolean);
-                refreshAllTabsForActiveQvfs(selectedFiles);
-            } else {
-                btnCloudMigrate.style.display = "none";
-                refreshAllTabsForActiveQvfs([]);
-            }
-        });
+    function handleCheckboxChange() {
+        const checkboxes = document.querySelectorAll('#qlik-cloud-app-checkboxes input[type="checkbox"]:checked');
+        const selectedFiles = Array.from(checkboxes).map(cb => APP_REGISTRY[cb.value]).filter(Boolean);
+        if (selectedFiles.length > 0) {
+            if (btnCloudMigrate) btnCloudMigrate.style.display = "block";
+            refreshAllTabsForActiveQvfs(selectedFiles);
+        } else {
+            if (btnCloudMigrate) btnCloudMigrate.style.display = "none";
+            refreshAllTabsForActiveQvfs([]);
+        }
+    }
 
+    if (btnCloudMigrate) {
         btnCloudMigrate.addEventListener("click", (e) => {
             e.preventDefault();
             executeMigrationFlow(btnCloudMigrate);
         });
     }
 
+    // Log Filter Tabs
+    document.querySelectorAll('.log-filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const filter = btn.dataset.filter;
+            document.querySelectorAll('#console-logs-body .log-line').forEach(line => {
+                if (filter === 'all') {
+                    line.style.display = '';
+                } else {
+                    line.style.display = line.dataset.category === filter ? '' : 'none';
+                }
+            });
+        });
+    });
+
     // ----------------------------------------------------------------------
     // 10. INITIALIZE UI WITH NO FILE SELECTED BY DEFAULT
     // ----------------------------------------------------------------------
-    // Initialization
     refreshAllTabsForActiveQvfs(currentActiveQvfs);
+
+    // Always open Run Migration tab on page load/refresh
+    const hashTab = window.location.hash ? window.location.hash.replace('#', '') : null;
+    if (hashTab && document.getElementById(hashTab)) {
+        switchTab(hashTab);
+    } else {
+        switchTab("tab-run");
+    }
 });

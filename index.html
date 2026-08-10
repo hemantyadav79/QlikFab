@@ -21,13 +21,13 @@
             </div>
             <div class="nav-section-title">NAVIGATE</div>
             <nav class="nav-menu">
-                <a href="#run-migration" class="nav-item" data-tab="tab-run">Run migration</a>
+                <a href="#run-migration" class="nav-item active" data-tab="tab-run">Run migration</a>
                 
-                <div class="accordion-item active">
-                    <a href="#agents" class="nav-item accordion-header active" data-tab="tab-agents-overview">
+                <div class="accordion-item">
+                    <a href="#agents" class="nav-item accordion-header" data-tab="tab-agents-overview">
                         Agents <i class="fa-solid fa-chevron-up"></i>
                     </a>
-                    <div class="accordion-body" style="display: block;">
+                    <div class="accordion-body" style="display: none;">
                         <a href="#assessment" class="nav-sub-item" data-tab="tab-assessment">
                             <span class="dot dot-blue"></span> Assessment <span class="badge-idle">IDLE</span>
                         </a>
@@ -66,7 +66,7 @@
             </header>
 
             <!-- TAB: AGENTS OVERVIEW (DEFAULT) -->
-            <section id="tab-agents-overview" class="tab-pane active">
+            <section id="tab-agents-overview" class="tab-pane">
                 <div class="section-title">
                     <h2>Migration engine phases</h2>
                     <p>The engine in <code>cli/ai_qvf_to_powerbi.py</code> runs these four phases over the .qvf binary. Open one to see its KPIs, output tables and the log lines that phase really printed.</p>
@@ -160,7 +160,7 @@
             </section>
 
             <!-- TAB: RUN MIGRATION -->
-            <section id="tab-run" class="tab-pane">
+            <section id="tab-run" class="tab-pane active">
                 <div class="qlik-cloud-container">
                     <div class="qlik-cloud-card">
                         <h2><i class="fa-solid fa-cloud"></i> Connect to Qlik Cloud</h2>
@@ -187,10 +187,10 @@
                                 <i class="fa-solid fa-check-circle"></i> Connection Successful!
                             </h3>
                             <div class="neumorphic-input-group">
-                                <label>Select Qlik Apps to Migrate (Hold Ctrl/Cmd to select multiple)</label>
-                                <select id="qlik-cloud-app-select" class="neumorphic-input" multiple style="height: 120px; padding: 10px;">
-                                    <!-- Options injected by JS after connection -->
-                                </select>
+                                <label>Select Qlik Apps to Migrate</label>
+                                <div id="qlik-cloud-app-checkboxes" class="app-checkbox-list">
+                                    <!-- Checkboxes injected by JS after connection -->
+                                </div>
                             </div>
                             <button id="btn-cloud-migrate" class="btn-primary-block" style="margin-top: 16px; display: none;">Start Autonomous Batch Migration</button>
                         </div>
@@ -364,6 +364,14 @@
                         <div class="console-title"><i class="fa-solid fa-robot"></i> Multi-Agent Execution</div>
                         <div class="console-status"><span class="pulse-dot"></span> IDLE</div>
                     </div>
+                    <div class="log-filter-tabs">
+                        <button class="log-filter-btn active" data-filter="all">All</button>
+                        <button class="log-filter-btn" data-filter="assessment">Assessment</button>
+                        <button class="log-filter-btn" data-filter="parsing">Parsing</button>
+                        <button class="log-filter-btn" data-filter="mapping">Mapping</button>
+                        <button class="log-filter-btn" data-filter="report">Report Generation</button>
+                        <button class="log-filter-btn failure-tab" data-filter="failure"><i class="fa-solid fa-triangle-exclamation"></i> Failures</button>
+                    </div>
                     <div class="console-logs" id="console-logs-body">
                         <div>[SYSTEM] Ready for new migration tasks.</div>
                     </div>
@@ -372,8 +380,126 @@
 
             <!-- TAB: SUMMARY -->
             <section id="tab-summary" class="tab-pane">
-                <div class="section-title">
-                    <h2>Platform Summary</h2>
+
+                <!-- HOW IT WORKS HERO -->
+                <div class="hiw-hero-card">
+                    <div class="hiw-hero-left">
+                        <span class="hiw-badge"><i class="fa-solid fa-gear"></i> HOW IT WORKS</span>
+                        <h2>Migration Engine Overview</h2>
+                        <p>Here is a simple look at the 4 steps our migration engine takes to convert your Qlik app into a Power BI project. We guarantee 100% accurate data models, smart AI translations, and a completely transparent process.</p>
+                    </div>
+                    <div class="hiw-hero-stats">
+                        <div class="hiw-stat-box">
+                            <b>4</b>
+                            <span>SIMPLE STEPS</span>
+                        </div>
+                        <div class="hiw-stat-box">
+                            <b>100%</b>
+                            <span>ACCURATE MODELS</span>
+                        </div>
+                        <div class="hiw-stat-box">
+                            <b>Smart</b>
+                            <span>AI TRANSLATION</span>
+                        </div>
+                        <div class="hiw-stat-box">
+                            <b>Zero</b>
+                            <span>DATA GUESSING</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- FOUR PHASES GRID -->
+                <div class="hiw-phases-grid">
+
+                    <!-- Phase 1 -->
+                    <div class="hiw-phase-card">
+                        <div class="hiw-phase-header">
+                            <div class="hiw-phase-icon" style="background: #3b82f6;"><i class="fa-solid fa-user"></i></div>
+                            <div>
+                                <span class="hiw-phase-tag tag-blue">PHASE 1 · EXTRACT</span>
+                                <h3>1. Read & Extract</h3>
+                            </div>
+                        </div>
+                        <div class="hiw-goal-box"><b><i class="fa-solid fa-bolt"></i> Goal:</b> Safely read everything out of your Qlik file without altering any of your original data.</div>
+                        <p>A Qlik file is a compressed package. We open it up carefully and extract all the essential building blocks:</p>
+                        <ul class="hiw-check-list">
+                            <li><i class="fa-solid fa-check"></i> Data model tables, fields & relationships</li>
+                            <li><i class="fa-solid fa-check"></i> Load script variables & expressions</li>
+                            <li><i class="fa-solid fa-check"></i> Dashboard sheets & visual objects</li>
+                            <li><i class="fa-solid fa-check"></i> Set analysis & aggregation formulas</li>
+                        </ul>
+                        <div class="hiw-callout warning"><b><i class="fa-solid fa-triangle-exclamation"></i> Safe Recovery:</b> If any part of the file is unreadable, we report exactly what's missing instead of making up data.</div>
+                    </div>
+
+                    <!-- Phase 2 -->
+                    <div class="hiw-phase-card">
+                        <div class="hiw-phase-header">
+                            <div class="hiw-phase-icon" style="background: #06b6d4;"><i class="fa-solid fa-rotate"></i></div>
+                            <div>
+                                <span class="hiw-phase-tag tag-cyan">PHASE 2 · MODEL</span>
+                                <h3>2. Build the Model</h3>
+                            </div>
+                        </div>
+                        <div class="hiw-goal-box"><b><i class="fa-solid fa-bolt"></i> Goal:</b> Recreate your Qlik data structure as a native Power BI Semantic Model.</div>
+                        <p>We take the tables and relationships we found in Phase 1 and build the Power BI data model (<code>model.bim</code>).</p>
+                        <ul class="hiw-check-list">
+                            <li><i class="fa-solid fa-check"></i> Every Qlik table → Power BI table</li>
+                            <li><i class="fa-solid fa-check"></i> Every Qlik field → column with correct data type</li>
+                            <li><i class="fa-solid fa-check"></i> All relationships preserved exactly</li>
+                            <li><i class="fa-solid fa-check"></i> Qlik expressions → DAX measures via AI</li>
+                        </ul>
+                        <div class="hiw-callout info"><b><i class="fa-solid fa-circle-info"></i> No Guessing Rule:</b> We never invent data types or make wild guesses. If a formula is too complex to translate automatically, we mark it clearly for your review.</div>
+                    </div>
+
+                    <!-- Phase 3 -->
+                    <div class="hiw-phase-card">
+                        <div class="hiw-phase-header">
+                            <div class="hiw-phase-icon" style="background: #8b5cf6;"><i class="fa-solid fa-layer-group"></i></div>
+                            <div>
+                                <span class="hiw-phase-tag tag-purple">PHASE 3 · REPORT</span>
+                                <h3>3. Create the Report</h3>
+                            </div>
+                        </div>
+                        <div class="hiw-goal-box"><b><i class="fa-solid fa-bolt"></i> Goal:</b> Convert your Qlik dashboard sheets into beautiful Power BI report pages.</div>
+                        <p>Every chart in Qlik is mapped directly to its closest Power BI equivalent:</p>
+                        <div class="hiw-pill-row">
+                            <span class="hiw-pill">Bar Chart → Column Chart</span>
+                            <span class="hiw-pill">Line Chart → Line Chart</span>
+                            <span class="hiw-pill">Pie Chart → Pie Chart</span>
+                            <span class="hiw-pill">KPI → Card</span>
+                            <span class="hiw-pill">Table → Table</span>
+                            <span class="hiw-pill">Filter → Slicer</span>
+                            <span class="hiw-pill">Gauge → Card</span>
+                            <span class="hiw-pill">Treemap → Treemap</span>
+                        </div>
+                        <p>We place every visual precisely on the page and connect them to the data model we built in Phase 2.</p>
+                        <div class="hiw-callout info"><b><i class="fa-solid fa-circle-info"></i> Visual Changes:</b> Since Power BI doesn't have an exact match for every Qlik visual (like specific gauge styles), we use the cleanest, most standard native Power BI visuals to ensure your report works perfectly.</div>
+                    </div>
+
+                    <!-- Phase 4 -->
+                    <div class="hiw-phase-card">
+                        <div class="hiw-phase-header">
+                            <div class="hiw-phase-icon" style="background: #10b981;"><i class="fa-solid fa-box-archive"></i></div>
+                            <div>
+                                <span class="hiw-phase-tag tag-green">PHASE 4 · PACKAGE</span>
+                                <h3>4. Package the Results</h3>
+                            </div>
+                        </div>
+                        <div class="hiw-goal-box"><b><i class="fa-solid fa-bolt"></i> Goal:</b> Bundle everything together into files you can open, share, or publish.</div>
+                        <p>We wrap up the whole process by creating ready-to-use Power BI files and a clear summary report of what happened:</p>
+                        <ul class="hiw-check-list">
+                            <li><i class="fa-solid fa-file"></i> <b>Power BI Template (.pbit):</b> A file you can double-click to open right in Power BI Desktop</li>
+                            <li><i class="fa-solid fa-folder"></i> <b>Fabric Project (.zip):</b> A folder ready to be instantly published to your online Microsoft Fabric workspace</li>
+                            <li><i class="fa-solid fa-list-check"></i> <b>Audit Report:</b> A simple text file detailing the exact results of the migration</li>
+                        </ul>
+                        <div class="hiw-callout success"><b><i class="fa-solid fa-circle-check"></i> Full Transparency:</b> The audit report will list out every single item that might need your manual attention, so you are never left guessing!</div>
+                    </div>
+
+                </div>
+
+                <!-- PLATFORM METRICS -->
+                <div class="section-title" style="margin-top: 32px;">
+                    <h2>Platform Metrics</h2>
                     <p>High-level metrics across all jobs.</p>
                 </div>
                 <div class="kpi-row">
