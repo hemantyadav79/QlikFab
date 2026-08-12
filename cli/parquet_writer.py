@@ -14,6 +14,7 @@ than silently turning it into nulls -- a column of nulls looks like missing data
 and is much harder to notice than a column of strings.
 """
 import os
+import sys
 
 
 class ParquetUnavailable(RuntimeError):
@@ -75,8 +76,11 @@ def build_arrow_table(columns, rows, column_types=None):
         import pyarrow as pa
     except ImportError as err:              # noqa: BLE001
         raise ParquetUnavailable(
-            "Staging to a Lakehouse needs the 'pyarrow' package "
-            "(pip install pyarrow)."
+            "Staging to a Lakehouse needs the 'pyarrow' package, and this "
+            "interpreter does not have it:\n\n    %s\n\n"
+            "Install it there specifically:\n\n"
+            '    "%s" -m pip install pyarrow'
+            % (sys.executable, sys.executable)
         ) from err
 
     column_types = column_types or {}
@@ -142,8 +146,11 @@ def write_parquet(path, columns, rows, column_types=None):
         import pyarrow.parquet as pq
     except ImportError as err:              # noqa: BLE001
         raise ParquetUnavailable(
-            "Staging to a Lakehouse needs the 'pyarrow' package "
-            "(pip install pyarrow)."
+            "Staging to a Lakehouse needs the 'pyarrow' package, and this "
+            "interpreter does not have it:\n\n    %s\n\n"
+            "Install it there specifically:\n\n"
+            '    "%s" -m pip install pyarrow'
+            % (sys.executable, sys.executable)
         ) from err
 
     table, notes = build_arrow_table(columns, rows, column_types)

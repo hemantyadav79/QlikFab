@@ -1,0 +1,19 @@
+# Runtime dependencies for the migration engine.
+#
+# Install them into the SAME interpreter that runs dev_server.py. The engine
+# runs as a subprocess of the server and inherits its sys.executable, so a
+# machine with both a python.org install and the Microsoft Store build can have
+# these present in one and missing in the other -- which shows up as a
+# migration that completes with every table empty, not as an install error.
+#
+#     python -m pip install -r requirements.txt
+#
+# Everything else the tool uses is in the standard library.
+
+# QIX engine websocket, for reading an app's real rows from Qlik Cloud.
+# Without it every table migrates as schema-only.
+websocket-client>=1.6
+
+# Parquet writer, for staging large tables into a Fabric Lakehouse
+# (--stage-lakehouse / any tenant-sourced run).
+pyarrow>=14

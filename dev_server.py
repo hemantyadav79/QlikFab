@@ -30,11 +30,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import tempfile
+
 import engine_runner
 import fabric_publisher
 
 # Serve the project regardless of where the launcher happened to be standing.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+# Ensure all temporary file allocations use a volume with sufficient disk space
+temp_root = engine_runner.get_working_temp_dir()
+os.environ["TEMP"] = temp_root
+os.environ["TMP"] = temp_root
+os.environ["TMPDIR"] = temp_root
+tempfile.tempdir = temp_root
 
 # The engine itself runs as a subprocess, so cli/*.py is re-read on every run.
 # These two are imported into this process and frozen at whatever they said when

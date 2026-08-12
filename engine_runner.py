@@ -92,6 +92,28 @@ def human_bytes(count):
     return "%.0f MB" % (count / 1048576.0)
 
 
+def get_working_temp_dir(needed=MIN_FREE_BYTES):
+    """Pick a temp root with sufficient free disk space."""
+    default_root = tempfile.gettempdir()
+    try:
+        if shutil.disk_usage(default_root).free >= needed:
+            return default_root
+    except OSError:
+        pass
+
+    # If default root lacks space, look for available volumes with room
+    for drive in ["D:\\", "E:\\", "F:\\"]:
+        if os.path.exists(drive):
+            try:
+                if shutil.disk_usage(drive).free >= needed:
+                    target = os.path.join(drive, "qlikmig_temp")
+                    os.makedirs(target, exist_ok=True)
+                    return target
+            except OSError:
+                pass
+    return default_root
+
+
 def require_free_space(path, needed, note=None):
     """Refuses to start work that the volume cannot hold.
 
@@ -120,36 +142,41 @@ def sweep_orphaned_work_dirs(note=None):
     dirs older than ORPHAN_SWEEP_AGE_SECONDS are touched, so a run belonging to
     another server started moments ago is left alone.
     """
-    root = tempfile.gettempdir()
+    roots = set([tempfile.gettempdir(), get_working_temp_dir()])
+    for candidate in ["D:\\qlikmig_temp", "E:\\qlikmig_temp", "F:\\qlikmig_temp"]:
+        if os.path.exists(candidate):
+            roots.add(candidate)
+
     cutoff = time.time() - ORPHAN_SWEEP_AGE_SECONDS
     removed = freed = 0
-    try:
-        entries = os.listdir(root)
-    except OSError:
-        return 0, 0
-
-    for entry in entries:
-        if not entry.startswith("qlikmig_"):
-            continue
-        path = os.path.join(root, entry)
-        if not os.path.isdir(path):
-            continue
+    for root in roots:
         try:
-            if os.path.getmtime(path) > cutoff:
-                continue
-            size = 0
-            for walk_root, _dirs, files in os.walk(path):
-                for name in files:
-                    try:
-                        size += os.path.getsize(os.path.join(walk_root, name))
-                    except OSError:
-                        pass
-            shutil.rmtree(path, ignore_errors=True)
-            if not os.path.exists(path):
-                removed += 1
-                freed += size
+            entries = os.listdir(root)
         except OSError:
             continue
+
+        for entry in entries:
+            if not entry.startswith("qlikmig_"):
+                continue
+            path = os.path.join(root, entry)
+            if not os.path.isdir(path):
+                continue
+            try:
+                if os.path.getmtime(path) > cutoff:
+                    continue
+                size = 0
+                for walk_root, _dirs, files in os.walk(path):
+                    for name in files:
+                        try:
+                            size += os.path.getsize(os.path.join(walk_root, name))
+                        except OSError:
+                            pass
+                shutil.rmtree(path, ignore_errors=True)
+                if not os.path.exists(path):
+                    removed += 1
+                    freed += size
+            except OSError:
+                continue
 
     if removed and note:
         note("[cleanup] Removed %d abandoned work dir(s), freeing %s."
@@ -196,7 +223,8 @@ class MigrationRun:
         # carries structure but no data.
         self._qlik_source = (None, None, None)
 
-        self.work_dir = tempfile.mkdtemp(prefix="qlikmig_%s_" % self.id)
+        temp_root = get_working_temp_dir()
+        self.work_dir = tempfile.mkdtemp(prefix="qlikmig_%s_" % self.id, dir=temp_root)
         self.input_path = os.path.join(self.work_dir, self.filename)
         self.output_dir = os.path.join(self.work_dir, "out")
         # A Qlik Cloud run has no bytes yet; they are exported from the tenant
@@ -333,10 +361,14 @@ class MigrationRun:
         self.note("[runner] %s" % " ".join(os.path.basename(c) if c.endswith(".py") else c for c in command[1:]))
 
         default_groq_key = "gsk_" + "PQBGV6p3AVh6e27TGZA3WGdyb3FYWsgjOfLwzo89lKHPtEcTza3W"
+        temp_root = get_working_temp_dir()
         child_env = dict(
             os.environ,
             PYTHONIOENCODING="utf-8",
-            GROQ_API_KEY=os.environ.get("GROQ_API_KEY", default_groq_key)
+            GROQ_API_KEY=os.environ.get("GROQ_API_KEY", default_groq_key),
+            TEMP=temp_root,
+            TMP=temp_root,
+            TMPDIR=temp_root,
         )
         # Passed by environment, never on the command line: argv is readable by
         # any process on the machine, and the note above is echoed to the UI.

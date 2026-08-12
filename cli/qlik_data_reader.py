@@ -27,6 +27,7 @@ dataset rather than an error.
 """
 import json
 import ssl
+import sys
 import time
 import urllib.parse
 
@@ -88,10 +89,22 @@ class QixSession:
         try:
             import websocket  # websocket-client
         except ImportError as err:      # noqa: BLE001
+            # The interpreter is named because it is almost never the one the
+            # reader is tested from. The engine runs as a subprocess of the dev
+            # server, so it inherits *that* server's Python -- and a machine
+            # with both a python.org install and the Microsoft Store build will
+            # happily have the package in one and not the other. Without the
+            # path in this message the obvious next step ("pip install
+            # websocket-client") installs it into the wrong one and the error
+            # comes back unchanged.
             raise QlikDataError(
-                "Reading data from Qlik Cloud needs the 'websocket-client' package "
-                "(pip install websocket-client). Without it the migration still runs, "
-                "but every table will be empty."
+                "Reading data from Qlik Cloud needs the 'websocket-client' "
+                "package, and this interpreter does not have it:\n\n"
+                "    %s\n\n"
+                "Install it there specifically:\n\n"
+                '    "%s" -m pip install websocket-client\n\n'
+                "Without it the migration still runs, but every table will be "
+                "empty." % (sys.executable, sys.executable)
             ) from err
 
         header = ["Authorization: %s" % self.authorization]
