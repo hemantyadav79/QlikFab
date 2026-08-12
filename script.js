@@ -1810,39 +1810,6 @@ ${(appData.gaps && appData.gaps.length)
             const progressPanel = document.getElementById("run-progress");
             if (progressPanel) progressPanel.classList.add("hidden");
             renderAgentDetailTabs();
-
-            if (dzName) dzName.textContent = "No file uploaded (Upload from folder or choose below)";
-            if (dzSize) dzSize.textContent = "0 KB";
-
-            const assessName = document.getElementById("assess-target-name");
-            if (assessName) assessName.textContent = "-- (No App Selected) --";
-
-            const kpiAppName = document.getElementById("kpi-app-name");
-            if (kpiAppName) kpiAppName.textContent = "--";
-
-            const kpiFields = document.getElementById("kpi-fields-cnt");
-            if (kpiFields) kpiFields.textContent = "0";
-
-            const kpiVisuals = document.getElementById("kpi-visuals-cnt");
-            if (kpiVisuals) kpiVisuals.textContent = "0";
-
-            const assessTbody = document.getElementById("assessment-tbody");
-            if (assessTbody) assessTbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 20px;">Please upload a QVF file or connect to Qlik Cloud to view assessment scorecard.</td></tr>`;
-
-            const reviewName = document.getElementById("review-target-name");
-            if (reviewName) reviewName.textContent = "-- (No App Selected) --";
-
-            const reviewTbody = document.getElementById("review-tbody");
-            if (reviewTbody) reviewTbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 20px;">No DAX expressions to review yet.</td></tr>`;
-
-            const artSubtitle = document.getElementById("artifact-dir-subtitle");
-            if (artSubtitle) artSubtitle.textContent = "--/";
-
-            const artPbitTitle = document.getElementById("artifact-pbit-title");
-            if (artPbitTitle) artPbitTitle.textContent = "--.pbit";
-
-            const artPbipTitle = document.getElementById("artifact-pbip-title");
-            if (artPbipTitle) artPbipTitle.textContent = "--.pbip";
             return;
         }
 
@@ -2913,7 +2880,6 @@ ${(appData.gaps && appData.gaps.length)
 
     async function executeMigrationFlow(btnElem) {
         if (!btnElem) return;
-<<<<<<< Updated upstream
         // After a run the button reports completion; its click listener is still
         // attached, so without this guard a second click would silently start the
         // whole migration over again.
@@ -3049,12 +3015,6 @@ ${(appData.gaps && appData.gaps.length)
                     `Continuing with the ${loadedKeys.length} app(s) that were read.`
                 ].join("\n"));
             }
-        } else if (!currentActiveQvf) {
-            alert("Please browse and upload a .QVF file from the left, or Connect to Qlik Cloud on the right and choose an app!");
-            const fileInput = document.getElementById("qvf-file-input");
-            if (fileInput) fileInput.click();
-            return;
-        }
         }
 
         // 1. Immediate interactive button press & running feedback
@@ -3227,241 +3187,11 @@ ${(appData.gaps && appData.gaps.length)
     if (btnStart) {
         btnStart.addEventListener("click", () => executeMigrationFlow(btnStart));
     }
-
-    // ----------------------------------------------------------------------
-    // 9. QLIK CLOUD CREDENTIALS & CONNECTED APPS DROPDOWN
-    // ----------------------------------------------------------------------
-    const btnConnectQlik = document.getElementById("btn-connect-qlik");
-    const qlikCloudAppsSection = document.getElementById("qlik-cloud-apps-section");
-    const btnMigrateCloudApp = document.getElementById("btn-migrate-cloud-app");
-    const qlikCloudAppSelect = document.getElementById("qlik-cloud-app-select");
-
-    async function fetchQlikCloudApps(tenantUrl, apiKey) {
-        let baseUrl = tenantUrl.trim().replace(/\/+$/, "");
-        if (!baseUrl.startsWith("http")) {
-            baseUrl = "https://" + baseUrl;
-        }
-
-        const headers = {
-            "Authorization": apiKey.startsWith("Bearer ") ? apiKey : `Bearer ${apiKey}`,
-            "Content-Type": "application/json"
-        };
-
-        let resp = await fetch(`${baseUrl}/api/v1/items?resourceType=app`, {
-            method: "GET",
-            headers: headers
-        });
-
-        if (!resp.ok) {
-            resp = await fetch(`${baseUrl}/api/v1/apps`, {
-                method: "GET",
-                headers: headers
-            });
-        }
-
-        if (!resp.ok) {
-            throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-        }
-
-        const json = await resp.json();
-        const appsList = json.data || json || [];
-        return Array.isArray(appsList) ? appsList : [];
-    }
-
-    if (btnConnectQlik) {
-        btnConnectQlik.addEventListener("click", async () => {
-            const tenantUrl = document.getElementById("qlik-tenant-url");
-            const apiKey = document.getElementById("qlik-api-key");
-            if (!tenantUrl || !tenantUrl.value.trim() || !apiKey || !apiKey.value.trim()) {
-                alert("Please enter both your Qlik Tenant URL and API Key / Token first!");
-                if (tenantUrl) tenantUrl.focus();
-                return;
-            }
-
-            btnConnectQlik.disabled = true;
-            btnConnectQlik.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Fetching apps from Qlik Cloud...`;
-
-            const badgeCount = document.querySelector(".qlik-cloud-apps-header .badge-count");
-
-            try {
-                const fetchedApps = await fetchQlikCloudApps(tenantUrl.value, apiKey.value);
-
-                qlikCloudAppSelect.innerHTML = ""; // Clear all options
-
-                if (fetchedApps.length === 0) {
-                    qlikCloudAppSelect.innerHTML = `<option value="">No apps present in this Qlik Cloud tenant</option>`;
-                    if (badgeCount) badgeCount.textContent = "0 Apps Found";
-                } else {
-                    fetchedApps.forEach(app => {
-                        const appName = app.name || app.title || "Unnamed Qlik App";
-                        const appId = app.id || app.resourceId || app._id;
-                        const opt = document.createElement("option");
-                        opt.value = appId;
-                        opt.setAttribute("data-name", appName);
-                        opt.textContent = `${appName} (ID: ${appId})`;
-                        qlikCloudAppSelect.appendChild(opt);
-
-                        // Dynamically register fetched Qlik app so migration works immediately
-                        QLIK_CLOUD_APPS_REGISTRY[appId] = {
-                            id: `QLIK-CLOUD-${appId.slice(0, 6)}`,
-                            filename: appName,
-                            projectDir: "qlik_cloud_tenant/apps",
-                            size: `${app.size ? Math.round(app.size / 1024 / 1024) + " MB" : "Live Qlik REST API"}`,
-                            sheets: "3 Pages",
-                            visuals: "20 Visuals",
-                            time: "7.90s",
-                            audit: "PASSED (100% DAX Conf)",
-                            date: new Date().toISOString().slice(0, 16).replace("T", " "),
-                            fieldsCnt: "25 Fields / 4 Tables",
-                            visualsCnt: "3 Sheets / 20 Charts",
-                            daxQueue: [
-                                { expr: "Sum(Amount)", dax: "SUM('Data'[Amount])", conf: "99.9%", status: "Auto-Approved" }
-                            ],
-                            pbitName: `${appName.replace(/\s+/g, "_")}.pbit`,
-                            pbipName: `${appName.replace(/\s+/g, "_")}.pbip`,
-                            pbitSize: "2.10 MB"
-                        };
-                    });
-                    if (badgeCount) badgeCount.textContent = `${fetchedApps.length} Apps Fetched`;
-                }
-
-                btnConnectQlik.disabled = false;
-                btnConnectQlik.classList.add("success-btn");
-                btnConnectQlik.innerHTML = `<i class="fa-solid fa-check"></i> Connected to Qlik Tenant`;
-                if (qlikCloudAppsSection) {
-                    qlikCloudAppsSection.classList.remove("hidden");
-                    qlikCloudAppsSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                }
-            } catch (error) {
-                btnConnectQlik.disabled = false;
-                btnConnectQlik.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Connection / Fetch Failed`;
-                alert(`Failed to fetch apps from Qlik Cloud:\n${error.message}\n\nPlease check your Tenant URL and API Token.`);
-                qlikCloudAppSelect.innerHTML = `<option value="">No apps available (Qlik API Connection Failed)</option>`;
-                if (badgeCount) badgeCount.textContent = "0 Apps";
-                if (qlikCloudAppsSection) {
-                    qlikCloudAppsSection.classList.remove("hidden");
-                }
-            }
-        });
-    }
-
-    const QLIK_CLOUD_APPS_REGISTRY = {
-        qlik_app_finance: {
-            id: "QLIK-CLOUD-9012",
-            filename: "[Finance Space] Global Revenue & P&L Analytics",
-            projectDir: "qlik_cloud_tenant/finance_space",
-            size: "Live Qlik REST API (48.2 MB model)",
-            sheets: "4 Pages",
-            visuals: "32 Visuals",
-            time: "9.42s",
-            audit: "PASSED (100% DAX Conf)",
-            date: new Date().toISOString().slice(0, 16).replace("T", " "),
-            fieldsCnt: "42 Fields / 6 Tables",
-            visualsCnt: "4 Sheets / 32 Charts",
-            daxQueue: [
-                { expr: "Sum(Revenue)", dax: "SUM('Financials'[Revenue])", conf: "99.9%", status: "Auto-Approved" },
-                { expr: "Sum(EBITDA)", dax: "SUM('Financials'[EBITDA])", conf: "99.8%", status: "Auto-Approved" },
-                { expr: "Sum(NetIncome)", dax: "SUM('Financials'[NetIncome])", conf: "99.9%", status: "Auto-Approved" }
-            ],
-            pbitName: "Global_Revenue_PnL_Analytics.pbit",
-            pbipName: "Global_Revenue_PnL_Analytics.pbip",
-            pbitSize: "3.42 MB"
-        },
-        qlik_app_sales: {
-            id: "QLIK-CLOUD-9013",
-            filename: "[Executive Space] Enterprise Sales Performance 360",
-            projectDir: "qlik_cloud_tenant/executive_space",
-            size: "Live Qlik REST API (34.0 MB model)",
-            sheets: "3 Pages",
-            visuals: "24 Visuals",
-            time: "8.10s",
-            audit: "PASSED (100% DAX Conf)",
-            date: new Date().toISOString().slice(0, 16).replace("T", " "),
-            fieldsCnt: "30 Fields / 4 Tables",
-            visualsCnt: "3 Sheets / 24 Charts",
-            daxQueue: [
-                { expr: "Sum(Sales)", dax: "SUM('Sales'[Amount])", conf: "99.9%", status: "Auto-Approved" },
-                { expr: "Count(Orders)", dax: "COUNTROWS('Orders')", conf: "99.7%", status: "Auto-Approved" }
-            ],
-            pbitName: "Enterprise_Sales_Performance_360.pbit",
-            pbipName: "Enterprise_Sales_Performance_360.pbip",
-            pbitSize: "2.80 MB"
-        },
-        qlik_app_supply: {
-            id: "QLIK-CLOUD-9014",
-            filename: "[Supply Chain Space] Real-time Logistics & Inventory Hub",
-            projectDir: "qlik_cloud_tenant/supply_chain_space",
-            size: "Live Qlik REST API (62.5 MB model)",
-            sheets: "5 Pages",
-            visuals: "40 Visuals",
-            time: "11.20s",
-            audit: "PASSED (100% DAX Conf)",
-            date: new Date().toISOString().slice(0, 16).replace("T", " "),
-            fieldsCnt: "55 Fields / 8 Tables",
-            visualsCnt: "5 Sheets / 40 Charts",
-            daxQueue: [
-                { expr: "Sum(InventoryValue)", dax: "SUM('Inventory'[Value])", conf: "99.8%", status: "Auto-Approved" },
-                { expr: "Avg(LeadTime)", dax: "AVERAGE('Logistics'[Days])", conf: "99.6%", status: "Auto-Approved" }
-            ],
-            pbitName: "Realtime_Logistics_Inventory_Hub.pbit",
-            pbipName: "Realtime_Logistics_Inventory_Hub.pbip",
-            pbitSize: "4.15 MB"
-        },
-        qlik_app_hr: {
-            id: "QLIK-CLOUD-9015",
-            filename: "[HR Space] Workforce Demographics & Attrition Model",
-            projectDir: "qlik_cloud_tenant/hr_space",
-            size: "Live Qlik REST API (18.4 MB model)",
-            sheets: "2 Pages",
-            visuals: "18 Visuals",
-            time: "6.50s",
-            audit: "PASSED (100% DAX Conf)",
-            date: new Date().toISOString().slice(0, 16).replace("T", " "),
-            fieldsCnt: "24 Fields / 3 Tables",
-            visualsCnt: "2 Sheets / 18 Charts",
-            daxQueue: [
-                { expr: "Count(Employees)", dax: "COUNTROWS('Workforce')", conf: "99.9%", status: "Auto-Approved" }
-            ],
-            pbitName: "Workforce_Demographics_Attrition.pbit",
-            pbipName: "Workforce_Demographics_Attrition.pbip",
-            pbitSize: "1.90 MB"
-        },
-        qlik_app_mkt: {
-            id: "QLIK-CLOUD-9016",
-            filename: "[Marketing Space] Multi-Channel ROI & Customer Attribution",
-            projectDir: "qlik_cloud_tenant/marketing_space",
-            size: "Live Qlik REST API (28.1 MB model)",
-            sheets: "3 Pages",
-            visuals: "22 Visuals",
-            time: "7.80s",
-            audit: "PASSED (100% DAX Conf)",
-            date: new Date().toISOString().slice(0, 16).replace("T", " "),
-            fieldsCnt: "32 Fields / 5 Tables",
-            visualsCnt: "3 Sheets / 22 Charts",
-            daxQueue: [
-                { expr: "Sum(AdSpend)", dax: "SUM('Campaigns'[Spend])", conf: "99.9%", status: "Auto-Approved" },
-                { expr: "Sum(Conversions)", dax: "SUM('Campaigns'[Conversions])", conf: "99.7%", status: "Auto-Approved" }
-            ],
-            pbitName: "Multi_Channel_ROI_Attribution.pbit",
-            pbipName: "Multi_Channel_ROI_Attribution.pbip",
-            pbitSize: "2.45 MB"
-        }
-    };
-
-    if (btnMigrateCloudApp && qlikCloudAppSelect) {
-        btnMigrateCloudApp.addEventListener("click", () => {
-            const appKey = qlikCloudAppSelect.value;
-            const targetApp = QLIK_CLOUD_APPS_REGISTRY[appKey] || APP_REGISTRY[appKey];
-            if (targetApp) {
-                currentActiveQvf = targetApp;
-                refreshAllTabsForActiveQvf(currentActiveQvf);
-                executeMigrationFlow(btnMigrateCloudApp);
-            }
-        });
+    if (btnMigrateQlik) {
+        btnMigrateQlik.addEventListener("click", () => executeMigrationFlow(btnMigrateQlik));
     }
 
     // ----------------------------------------------------------------------
-<<<<<<< Updated upstream
     // 8b. LIVE QLIK CLOUD REST CONNECTION
     // Lists the tenant's real apps into the picker. Credentials are read from the
     // form for this one request only — nothing is persisted.
