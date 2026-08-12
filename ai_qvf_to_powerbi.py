@@ -981,8 +981,54 @@ VISUAL_MAP = {
     "sn-funnel-chart": "funnel",
 }
 
-CARD_VISUALS = {"card", "gauge", "kpi"}
-TABLE_VISUALS = {"tableEx", "pivotTable"}
+# Every Power BI visual accepts fields only under the data roles its own
+# capabilities declare. A projection filed under a role the visual does not own
+# is dropped without an error, which is what makes a visual come up blank while
+# the model behind it is fine. These are the roles that differ from the default
+# Category / Y / Series shape used by the cartesian charts.
+#   dims  : roles that take the chart's dimension columns, in order
+#   meas  : roles that take the chart's measures, in order
+#   spill : role that soaks up any measures left over ("" = drop them)
+ROLE_LAYOUT = {
+    "card":        {"dims": [], "meas": ["Values"], "spill": ""},
+    "multiRowCard": {"dims": [], "meas": ["Values"], "spill": "Values"},
+    "slicer":      {"dims": ["Values"], "meas": [], "spill": ""},
+    "tableEx":     {"dims": ["Values"], "meas": ["Values"], "spill": "Values"},
+    "pivotTable":  {"dims": ["Rows", "Columns"], "meas": ["Values"], "spill": "Values"},
+    "gauge":       {"dims": [], "meas": ["Y", "TargetValue"], "spill": ""},
+    "kpi":         {"dims": ["TrendAxis"], "meas": ["Indicator", "Goal"], "spill": ""},
+    "treemap":     {"dims": ["Group", "Details"], "meas": ["Values"], "spill": "Values"},
+    "scatterChart": {"dims": ["Category", "Series"], "meas": ["X", "Y", "Size"],
+                     "spill": ""},
+    "map":         {"dims": ["Category", "Series"], "meas": ["Size"], "spill": ""},
+    "lineClusteredColumnComboChart": {"dims": ["Category", "Series"],
+                                      "meas": ["Y", "Y2"], "spill": "Y"},
+}
+DEFAULT_ROLE_LAYOUT = {"dims": ["Category", "Series"], "meas": ["Y"], "spill": "Y"}
+
+
+def role_assignments(vtype, dimensions, measures):
+    """Map this chart's fields onto the roles the target visual actually has.
+
+    Yields (role, field, is_dimension) in the order the roles should be filled.
+    """
+    layout = ROLE_LAYOUT.get(vtype, DEFAULT_ROLE_LAYOUT)
+    out = []
+
+    for role, dim in zip(layout["dims"], dimensions):
+        out.append((role, dim, True))
+    # Extra dimensions only fit where a role repeats (tables, matrices).
+    for dim in dimensions[len(layout["dims"]):]:
+        if layout["dims"] and layout["dims"][-1] == layout.get("spill"):
+            out.append((layout["dims"][-1], dim, True))
+
+    for role, meas in zip(layout["meas"], measures):
+        out.append((role, meas, False))
+    if layout["spill"]:
+        for meas in measures[len(layout["meas"]):]:
+            out.append((layout["spill"], meas, False))
+
+    return out
 
 
 class VisualBuilder:
@@ -1048,38 +1094,15 @@ class VisualBuilder:
         vtype = self._visual_type(chart, dimensions, measures)
         x, y, w, h = box
 
+        if vtype == "slicer" and not dimensions:
+            dimensions = [(table, self.model.tables[0]["columns"][0]["name"])]
+
         query_state = {}
-        if vtype == "slicer":
-            source = dimensions or [(table, self.model.tables[0]["columns"][0]["name"])]
-            t, col = source[0]
-            query_state["Values"] = {"projections": [make_projection(
-                make_column_ref(t, col), f"{t}.{col}", col, active=True)]}
-        elif vtype in CARD_VISUALS:
-            projections = [make_projection(make_measure_ref(t, mname),
-                                           f"{t}.{mname}", mname)
-                           for t, mname in measures[:1]]
-            query_state["Values"] = {"projections": projections}
-        elif vtype in TABLE_VISUALS:
-            projections = [make_projection(make_column_ref(t, col),
-                                           f"{t}.{col}", col, active=True)
-                           for t, col in dimensions]
-            projections += [make_projection(make_measure_ref(t, mname),
-                                            f"{t}.{mname}", mname)
-                            for t, mname in measures]
-            query_state["Values"] = {"projections": projections}
-        else:
-            if dimensions:
-                t, col = dimensions[0]
-                query_state["Category"] = {"projections": [make_projection(
-                    make_column_ref(t, col), f"{t}.{col}", col, active=True)]}
-            if measures:
-                query_state["Y"] = {"projections": [
-                    make_projection(make_measure_ref(t, mname), f"{t}.{mname}", mname)
-                    for t, mname in measures]}
-            if len(dimensions) > 1:
-                t, col = dimensions[1]
-                query_state["Series"] = {"projections": [make_projection(
-                    make_column_ref(t, col), f"{t}.{col}", col, active=True)]}
+        for role, (t, field), is_dim in role_assignments(vtype, dimensions, measures):
+            proj = (make_projection(make_column_ref(t, field), f"{t}.{field}",
+                                    field, active=True) if is_dim else
+                    make_projection(make_measure_ref(t, field), f"{t}.{field}", field))
+            query_state.setdefault(role, {"projections": []})["projections"].append(proj)
 
         return {
             "$schema": self.SCHEMA,
@@ -1124,21 +1147,12 @@ class VisualBuilder:
                            "Name": f"{t}.{mname}"})
             return {"queryRef": f"{t}.{mname}"}
 
-        if vtype == "slicer":
-            source = dimensions or [(table, self.model.tables[0]["columns"][0]["name"])]
-            projections["Values"] = [add_column(*source[0])]
-        elif vtype in CARD_VISUALS:
-            projections["Values"] = [add_measure(*m) for m in measures[:1]]
-        elif vtype in TABLE_VISUALS:
-            projections["Values"] = ([add_column(*d) for d in dimensions] +
-                                     [add_measure(*m) for m in measures])
-        else:
-            if dimensions:
-                projections["Category"] = [add_column(*dimensions[0])]
-            if measures:
-                projections["Y"] = [add_measure(*m) for m in measures]
-            if len(dimensions) > 1:
-                projections["Series"] = [add_column(*dimensions[1])]
+        if vtype == "slicer" and not dimensions:
+            dimensions = [(table, self.model.tables[0]["columns"][0]["name"])]
+
+        for role, (t, field), is_dim in role_assignments(vtype, dimensions, measures):
+            entry = add_column(t, field) if is_dim else add_measure(t, field)
+            projections.setdefault(role, []).append(entry)
 
         config = {
             "name": f"visual{new_guid().replace('-', '')[:20]}",
@@ -1270,7 +1284,14 @@ class UniversalPBIPGenerator:
         self._write_json(self.definition_dir / "report.json", {
             "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/"
                        "definition/report/2.0.0/schema.json",
-            "themeCollection": {"baseTheme": {"name": "CY24SU10"}},
+            # baseTheme is validated against the published schema on load, and a
+            # missing required property is a blocking error: Power BI refuses the
+            # whole report definition and opens the model with an empty canvas.
+            "themeCollection": {"baseTheme": {
+                "name": "CY24SU10",
+                "reportVersionAtImport": "5.55",
+                "type": "SharedResources",
+            }},
             "settings": {
                 "useStylableVisualContainerHeader": True,
                 "exportDataMode": "AllowSummarized",

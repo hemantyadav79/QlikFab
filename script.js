@@ -278,11 +278,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
         for (const appData of currentActiveQvfs) {
             const base = appData.name.replace(/\s+/g, "_");
-            const name = kind === "pbit" ? appData.pbitName
-                : kind === "pbip" ? `${base}_Fabric_PBIP_Project.zip`
-                : `${base}_MIGRATION_AUDIT_REPORT.md`;
             try {
-                zip.file(name, await fetchArtifact(appData.artifacts[kind]));
+                const blob = await fetchArtifact(appData.artifacts[kind]);
+                if (kind === "pbip") {
+                    // A PBIP artifact is itself a .zip. Nesting it would force the
+                    // user to unzip twice, so unpack it into a per-app folder and
+                    // the single outer extract lands on an openable project.
+                    const inner = await JSZip.loadAsync(blob);
+                    const entries = Object.values(inner.files).filter(e => !e.dir);
+                    for (const entry of entries) {
+                        zip.file(`${base}_Fabric_PBIP_Project/${entry.name}`,
+                                 await entry.async("blob"));
+                    }
+                } else {
+                    zip.file(kind === "pbit" ? appData.pbitName
+                                             : `${base}_MIGRATION_AUDIT_REPORT.md`, blob);
+                }
             } catch (err) {
                 failures.push(`${appData.filename}: ${err.message}`);
             }
