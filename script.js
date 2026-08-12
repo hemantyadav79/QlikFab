@@ -814,7 +814,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 }, log.time);
             });
 
-            setTimeout(() => {
+            const finishMigration = () => {
+                if (window.activeCloudMigrations > 0) {
+                    btnElem.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Waiting for cloud migrations...`;
+                    setTimeout(finishMigration, 1000);
+                    return;
+                }
+                
                 if (consoleBadge) {
                     consoleBadge.className = "console-status success";
                     consoleBadge.innerHTML = `<i class="fa-solid fa-check"></i> COMPLETED`;
@@ -845,7 +851,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     e.preventDefault();
                     switchTab("tab-artifacts");
                 };
-            }, baseTime + 500);
+            };
+            setTimeout(finishMigration, baseTime + 500);
         }
     }
 
@@ -865,6 +872,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const appsSection = document.getElementById("qlik-cloud-apps-section");
     const appCheckboxContainer = document.getElementById("qlik-cloud-app-checkboxes");
     const btnCloudMigrate = document.getElementById("btn-cloud-migrate");
+    
+    window.activeCloudMigrations = 0;
 
     if (btnTestConn) {
         btnTestConn.addEventListener("click", (e) => {
@@ -957,6 +966,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
                              itemDiv.style.opacity = "0.7";
                              label.innerHTML = `${originalText} <i class="fa-solid fa-spinner fa-spin" style="margin-left: 8px;"></i> <span style="font-size: 11px; color: #10b981;">Migrating from Qlik Cloud...</span>`;
+                             window.activeCloudMigrations++;
                              try {
                                  const summary = await migrateCloudApp(
                                      baseUrl, apiKey.value, appId, appName);
@@ -967,6 +977,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                  itemDiv.querySelector('input').checked = false;
                                  itemDiv.classList.remove('checked');
                              } finally {
+                                 window.activeCloudMigrations--;
                                  label.textContent = originalText;
                                  itemDiv.style.opacity = "1";
                                  handleCheckboxChange();
