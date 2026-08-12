@@ -67,6 +67,8 @@ class QVFExtractor:
         self.tables: list = []
         self.base64_metadata: list = []
         self.all_objects: list = []  # All decompressed JSON objects
+        self.master_measures: dict = {}
+        self.master_dimensions: dict = {}
         self._zlib_streams: list = []
 
     # ----------------------------------------------------------
@@ -178,6 +180,10 @@ class QVFExtractor:
                 self._parse_app_properties(obj)
             elif 'qEntryList' in obj and 'qId' in obj:
                 self._parse_variables(obj)
+            elif 'qMeasure' in obj and 'qInfo' in obj:
+                self._parse_master_measure(obj)
+            elif 'qDim' in obj and 'qInfo' in obj:
+                self._parse_master_dimension(obj)
 
         print(f"  [OK] Classified {len(self.all_objects)} JSON objects")
 
@@ -255,6 +261,7 @@ class QVFExtractor:
             chart['dimensions'].append({
                 'field': dim_def.get('qFieldDefs', [''])[0] if dim_def.get('qFieldDefs') else '',
                 'label': dim_def.get('qFieldLabels', [''])[0] if dim_def.get('qFieldLabels') else '',
+                'library_id': dim.get('qLibraryId', ''),
                 'sort': dim_def.get('qSortCriterias', []),
             })
 
@@ -264,6 +271,7 @@ class QVFExtractor:
             chart['measures'].append({
                 'expression': meas_def.get('qDef', ''),
                 'label': meas_def.get('qLabel', ''),
+                'library_id': meas.get('qLibraryId', ''),
                 'format': meas_def.get('qNumFormat', {}),
             })
 
@@ -275,6 +283,53 @@ class QVFExtractor:
                 chart['settings'][key] = prop[key]
 
         return chart
+
+    def _parse_master_measure(self, obj: dict):
+        """
+        Extract a master measure.
+
+        Charts in a well-built Qlik app rarely spell their expressions out;
+        they point at a shared 'master item' by id. Collecting those here is
+        what lets the charts be resolved to real expressions later.
+        """
+        meas = obj.get('qMeasure', {})
+        meta = obj.get('qMetaDef', {})
+        self.master_measures[obj.get('qInfo', {}).get('qId', '')] = {
+            'expression': meas.get('qDef', ''),
+            'label': meas.get('qLabel') or meta.get('title', ''),
+            'format': meas.get('qNumFormat', {}),
+        }
+
+    def _parse_master_dimension(self, obj: dict):
+        """Extract a master dimension (the dimension half of the same story)."""
+        dim = obj.get('qDim', {})
+        meta = obj.get('qMetaDef', {})
+        fields = dim.get('qFieldDefs', []) or []
+        labels = dim.get('qFieldLabels', []) or []
+        self.master_dimensions[obj.get('qInfo', {}).get('qId', '')] = {
+            'field': fields[0] if fields else '',
+            'label': (labels[0] if labels else '') or meta.get('title', ''),
+        }
+
+    def _resolve_master_items(self):
+        """Fill each chart's empty dimensions and measures from the master library."""
+        resolved = 0
+        for sheet in self.sheets:
+            for chart in sheet.get('charts', []):
+                for dim in chart.get('dimensions', []):
+                    master = self.master_dimensions.get(dim.get('library_id'))
+                    if master and not dim.get('field'):
+                        dim['field'] = master['field']
+                        dim['label'] = dim.get('label') or master['label']
+                        resolved += 1
+                for meas in chart.get('measures', []):
+                    master = self.master_measures.get(meas.get('library_id'))
+                    if master and not meas.get('expression'):
+                        meas['expression'] = master['expression']
+                        meas['label'] = meas.get('label') or master['label']
+                        resolved += 1
+        if resolved:
+            print(f"  [OK] Resolved {resolved} master item reference(s) in charts")
 
     def _parse_data_model(self, obj: dict):
         """Extract data model metadata (fields, tables, reload info)."""
@@ -448,6 +503,8 @@ class QVFExtractor:
         print("[4/7] Classifying JSON objects...")
         self._classify_streams()
 
+        self._resolve_master_items()
+
         print("[5/7] Extracting field names (fallback)...")
         self._extract_field_names_from_binary()
 
@@ -473,6 +530,10 @@ class QVFExtractor:
             },
             'sheets': self.sheets,
             'variables': self.variables,
+            'master_items': {
+                'measures': self.master_measures,
+                'dimensions': self.master_dimensions,
+            },
             'security_metadata': self.base64_metadata,
         }
 
