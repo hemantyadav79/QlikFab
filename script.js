@@ -487,9 +487,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 }).join("")
                 : `<span class="field-chip">No field names resolved</span>`;
             return `
-                <div style="margin-bottom: 18px;">
-                    <b>${escapeHtml(app.filename)}</b>
-                    <p class="agent-section-note">${app.source === "qlik-cloud"
+                <div style="margin-bottom: 40px;">
+                    <b style="display: block; margin-bottom: 6px;">${escapeHtml(app.filename)}</b>
+                    <p class="agent-section-note" style="margin-bottom: 14px;">${app.source === "qlik-cloud"
                         ? `${cols.length} field(s) returned by the Qlik Cloud data model endpoint${app.tablesCnt ? ` across ${app.tablesCnt} table(s)` : ""}.`
                         : `${cols.length} field name(s) recovered from the load script; the schema header reports ${escapeHtml(app.fieldsCnt)}. The two counts come from separate reads and are not guaranteed to match.`}</p>
                     <div>${chips}</div>
@@ -2192,15 +2192,6 @@ ${(appData.gaps && appData.gaps.length)
                         <thead><tr><th>Missing</th></tr></thead>
                         <tbody>${d.gaps.map(g => `<tr><td><span class="gap-pill">${escapeHtml(g)}</span></td></tr>`).join("")}</tbody>
                     </table>
-                </div>` : ""}
-
-                ${d.engineRunId ? `
-                <div class="action-bar">
-                    <button class="btn-primary-block" id="btn-history-download" style="width: auto; padding: 12px 28px;">
-                        <i class="fa-solid fa-download"></i> Download this run's bundle
-                    </button>
-                    <p class="agent-section-note">Runs are held in memory by the engine, so this is only
-                       available until the server restarts.</p>
                 </div>` : ""}`;
         }
 
@@ -2209,18 +2200,6 @@ ${(appData.gaps && appData.gaps.length)
 
         const backBtn = document.getElementById("btn-history-back");
         if (backBtn) backBtn.addEventListener("click", showHistoryList);
-
-        const dl = document.getElementById("btn-history-download");
-        if (dl && d && d.engineRunId) {
-            dl.addEventListener("click", () => {
-                const link = document.createElement("a");
-                link.href = `/api/runs/${d.engineRunId}/download`;
-                link.download = d.artifactName || `${d.appName || job.file}.zip`;
-                document.body.appendChild(link);
-                link.click();
-                link.remove();
-            });
-        }
     }
 
     // ----------------------------------------------------------------------
