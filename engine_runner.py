@@ -191,6 +191,11 @@ class MigrationRun:
         self.summary = None             # counted from generated files, never estimated
         self._lock = threading.Lock()
 
+        # Set by _export_then_run for tenant-sourced runs, so the engine can
+        # read the app's rows over QIX. Stays unset for an uploaded .qvf, which
+        # carries structure but no data.
+        self._qlik_source = (None, None, None)
+
         self.work_dir = tempfile.mkdtemp(prefix="qlikmig_%s_" % self.id)
         self.input_path = os.path.join(self.work_dir, self.filename)
         self.output_dir = os.path.join(self.work_dir, "out")
@@ -289,6 +294,12 @@ class MigrationRun:
             self.note("[export] %s" % err)
             return
         self.note("[export] Wrote %.2f MB to %s" % (size / 1048576.0, self.filename))
+
+        # The .qvf carries the app's structure but not its rows. Handing the
+        # engine the tenant as well lets it read the real data over QIX, which
+        # is the only way a published Fabric report shows anything: the service
+        # cannot reach a file path on this machine.
+        self._qlik_source = (tenant, app_id, authorization)
         self._run()
 
     def _run(self):
@@ -306,6 +317,19 @@ class MigrationRun:
             "--qvf", self.input_path,
             "--output", self.output_dir,
         ]
+
+        tenant, app_id, authorization = getattr(self, "_qlik_source", (None, None, None))
+        if tenant and app_id:
+            command += ["--qlik-tenant", tenant, "--qlik-app-id", app_id]
+            # Stage to a Lakehouse rather than embedding rows in the model.
+            # Embedding is bounded by the Fabric request body -- a 632,000-row
+            # fact table is ~103 MB of M and is refused -- so a tenant run,
+            # which is the only kind that has real rows, stages by default.
+            # QLIKFAB_EMBED_ROWS=1 forces the old behaviour for a small app,
+            # where embedding avoids needing a Storage-audience token at all.
+            if os.environ.get("QLIKFAB_EMBED_ROWS", "").strip().lower() not in ("1", "true", "yes"):
+                command.append("--stage-lakehouse")
+
         self.note("[runner] %s" % " ".join(os.path.basename(c) if c.endswith(".py") else c for c in command[1:]))
 
         default_groq_key = "gsk_" + "PQBGV6p3AVh6e27TGZA3WGdyb3FYWsgjOfLwzo89lKHPtEcTza3W"
@@ -314,6 +338,10 @@ class MigrationRun:
             PYTHONIOENCODING="utf-8",
             GROQ_API_KEY=os.environ.get("GROQ_API_KEY", default_groq_key)
         )
+        # Passed by environment, never on the command line: argv is readable by
+        # any process on the machine, and the note above is echoed to the UI.
+        if authorization:
+            child_env["QLIK_AUTHORIZATION"] = authorization
 
         try:
             process = subprocess.Popen(

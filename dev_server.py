@@ -36,6 +36,65 @@ import fabric_publisher
 # Serve the project regardless of where the launcher happened to be standing.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+# The engine itself runs as a subprocess, so cli/*.py is re-read on every run.
+# These two are imported into this process and frozen at whatever they said when
+# it started -- edit one while the server is up and the change simply does not
+# take effect. That has cost a debugging session: the symptom is a run that
+# behaves like an older build for no visible reason, so the mtimes are recorded
+# at import and checked before each run.
+_LOADED_AT = {
+    module.__name__: os.path.getmtime(module.__file__)
+    for module in (engine_runner, fabric_publisher)
+}
+
+
+def stale_modules():
+    """Modules edited on disk since this process imported them."""
+    stale = []
+    for name, loaded in _LOADED_AT.items():
+        path = sys.modules[name].__file__
+        try:
+            if os.path.getmtime(path) > loaded + 1:
+                stale.append(os.path.basename(path))
+        except OSError:
+            continue
+    return stale
+
+
+def _warn_if_stale(run):
+    """Puts the warning in the run's own log, where it will actually be read."""
+    stale = stale_modules()
+    if not stale:
+        return
+    run.note(
+        "[server] WARNING: %s changed on disk after this server started, so this "
+        "run is using the older version still loaded in memory. Restart the dev "
+        "server to pick the changes up." % ", ".join(sorted(stale))
+    )
+
+
+def stale_publish_error():
+    """
+    Why a publish must not proceed on stale code, or None when it may.
+
+    A warning was not enough. Publishing with an out-of-date fabric_publisher
+    produced Fabric reports that could not work, each after several minutes of
+    reading data -- and the resulting items look successful in the workspace, so
+    the wasted run is only discovered by opening the report. Refusing costs one
+    restart; not refusing costs the whole run.
+    """
+    stale = [name for name in stale_modules() if name == "fabric_publisher.py"]
+    if not stale:
+        return None
+    return (
+        "Not publishing: fabric_publisher.py has changed on disk since this "
+        "server started, so the publish would run the older copy still held in "
+        "memory.\n\n"
+        "Restart the dev server (Ctrl+C, then `python dev_server.py 5173`) and "
+        "publish again. The migration output is complete and stays downloadable "
+        "from Migration history, so nothing needs re-running."
+    )
+
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8777
 PROXY_PATH = "/qlik-proxy"
 FABRIC_PROXY_PATH = "/fabric-proxy"
@@ -141,6 +200,7 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
         name = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("name") or ["upload.qvf"])[0]
         payload = self.rfile.read(length)
         run = engine_runner.STORE.create(name, payload)
+        _warn_if_stale(run)
         run.start()
         self.send_json(202, run.snapshot())
 
@@ -165,6 +225,7 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         run = engine_runner.STORE.create(name, payload=None)
+        _warn_if_stale(run)
         run.start_from_qlik(tenant, app_id, authorization)
         self.send_json(202, run.snapshot())
 
@@ -181,6 +242,13 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
         display_name = (query.get("name") or [""])[0]
         authorization = self.headers.get("Authorization") or ""
         token = authorization[7:].strip() if authorization[:7].lower() == "bearer " else ""
+        # A Direct Lake project also needs a Storage-audience token for OneLake;
+        # the Fabric one is rejected there with a bare 401. Sent as a separate
+        # header because it is a genuinely different credential, not an
+        # alternative encoding of the same one.
+        storage_header = self.headers.get("X-Storage-Authorization") or ""
+        storage_token = (storage_header[7:].strip()
+                         if storage_header[:7].lower() == "bearer " else storage_header.strip())
 
         run = engine_runner.STORE.get(run_id)
         if not run:
@@ -204,9 +272,20 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         name = display_name or engine_runner.safe_stem(run.filename)
+
+        # Refused rather than warned about: a publish on stale code produces a
+        # workspace item that looks successful and does not work.
+        stale = stale_publish_error()
+        if stale:
+            run.note("[publish] %s" % stale.splitlines()[0])
+            self.send_json(409, {"error": stale})
+            return
+
+        _warn_if_stale(run)
         try:
             result = fabric_publisher.publish(
-                run.output_dir, workspace_id, token, name, note=run.note
+                run.output_dir, workspace_id, token, name, note=run.note,
+                storage_token=storage_token,
             )
         except Exception as err:                  # noqa: BLE001 - shown to the user verbatim
             run.note("[publish] FAILED: %s" % err)

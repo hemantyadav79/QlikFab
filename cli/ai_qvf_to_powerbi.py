@@ -26,6 +26,7 @@ from pathlib import Path
 from qlik_script_parser import parse_load_script, QlikTable, QlikField, QlikSource
 from powerquery_builder import (
     TypeResolver,
+    build_embedded_expression,
     build_partition_expression,
     build_root_parameter_expression,
     default_root_for,
@@ -373,6 +374,12 @@ class AIConverterBrain:
 # HELPER UTILITIES
 # ============================================================
 
+def _mb(num_bytes):
+    """Bytes as MB for a message. Trimmed, so a sub-MB budget is not shown as 0."""
+    mb = num_bytes / (1024.0 * 1024.0)
+    return ("%.2f" % mb).rstrip("0").rstrip(".") if mb < 1 else "%d" % mb
+
+
 def new_guid():
     return str(uuid.uuid4())
 
@@ -431,12 +438,37 @@ class UniversalModelGenerator:
     or infers a type from a column name.
     """
 
-    def __init__(self, extraction_data: dict, ai_brain: AIConverterBrain, server: str = None, database: str = "postgres", mode: str = "offline"):
+    # Embedded rows travel to Fabric base64-encoded inside a single JSON body,
+    # which inflates them by a third and is rejected outright past a certain
+    # size. The budget is on generated M text, shared across every table,
+    # because a row count is the wrong control: 50,000 rows of a two-column
+    # lookup is trivial, and 50,000 rows of a twenty-column fact table is 30 MB.
+    DEFAULT_EMBED_BUDGET_BYTES = 15 * 1024 * 1024
+
+    def __init__(self, extraction_data: dict, ai_brain: AIConverterBrain, server: str = None,
+                 database: str = "postgres", mode: str = "offline",
+                 embedded_data: dict = None, data_problems: dict = None,
+                 embed_budget_bytes: int = None, stage_dir: str = None):
         self.data = extraction_data
         self.ai = ai_brain
         self.server = server
         self.database = database
         self.mode = mode
+
+        # Rows read from the live Qlik engine, keyed by the engine's table name.
+        # Empty for a .qvf handed over on its own: the file carries structure,
+        # never data.
+        self.embedded_data = embedded_data or {}
+        self.data_problems = data_problems or {}
+        self.embed_budget_bytes = embed_budget_bytes or self.DEFAULT_EMBED_BUDGET_BYTES
+
+        # When set, rows are written to Parquet here and the model reads them as
+        # Direct Lake instead of carrying them inline.
+        self.stage_dir = stage_dir
+        self.staged_tables = []
+        self.stage_notes = []
+        self.size_notes = []
+        self.engine_only_tables = []
 
         self.script_tables = self._discover_tables()
         self.resolver = TypeResolver(
@@ -457,6 +489,11 @@ class UniversalModelGenerator:
         # shared field names with no explicit join; Power BI needs a modelled
         # relationship, so these are reported for the user to wire up.
         self.cross_table_measures = set()
+
+        # table -> set of measure names this model actually defines, filled in
+        # as they are built and handed to the visual generator so a visual can
+        # never project a measure that does not exist.
+        self.built_measures = {}
 
         # The largest table is the sensible default for visuals whose field
         # references cannot be resolved.
@@ -492,9 +529,300 @@ class UniversalModelGenerator:
             )
         ]
 
+    def _embedded_for(self, table_name: str):
+        """
+        Rows the engine returned for this table, matched case-insensitively.
+
+        The engine keys tables by their script name; model.bim holds a
+        Tabular-safe variant, and the two differ in case often enough that an
+        exact match silently loses the data.
+        """
+        wanted = str(table_name or "").lower()
+        for name, payload in self.embedded_data.items():
+            if str(name).lower() == wanted:
+                return payload
+        return None
+
+    def _fit_embedded_data(self):
+        """
+        Trim embedded rows to fit the size budget, smallest tables first.
+
+        Filling the budget in ascending order of size means a single wide fact
+        table cannot crowd out every lookup table around it; the model stays
+        usable and the one table that had to be cut is named. Nothing is
+        dropped silently -- a trimmed table is marked truncated and a table
+        that could not be embedded at all is recorded in size_notes.
+        """
+        if not self.embedded_data:
+            return
+
+        def row_bytes(payload):
+            """Bytes one row costs in the generated M, measured on a sample."""
+            rows = payload["rows"][:20]
+            if not rows:
+                return 1
+            total = sum(
+                sum(len(str(cell)) + 4 for cell in row) + 8 for row in rows
+            )
+            return max(total // len(rows), 1)
+
+        budget = self.embed_budget_bytes
+        ordered = sorted(
+            self.embedded_data.items(),
+            key=lambda kv: row_bytes(kv[1]) * len(kv[1]["rows"]),
+        )
+
+        for name, payload in ordered:
+            cost = row_bytes(payload)
+            wanted = len(payload["rows"])
+            affordable = int(budget // cost) if cost else wanted
+            if affordable >= wanted:
+                budget -= cost * wanted
+                continue
+            if affordable <= 0:
+                self.size_notes.append(
+                    "`%s` (%s row(s)) did not fit the %s MB embedded-data budget "
+                    "and was left as an empty table rather than partly filled."
+                    % (name, f"{wanted:,}", _mb(self.embed_budget_bytes)))
+                payload["rows"] = []
+                payload["truncated"] = True
+                continue
+            self.size_notes.append(
+                "`%s` was cut from %s to %s row(s) to fit the %s MB embedded-data "
+                "budget. Stage to a Lakehouse to carry it whole."
+                % (name, f"{wanted:,}", f"{affordable:,}",
+                   _mb(self.embed_budget_bytes)))
+            payload["rows"] = payload["rows"][:affordable]
+            payload["truncated"] = True
+            budget = 0
+
+    # Substituted by the publisher once Fabric has assigned the ids. The
+    # engine cannot know them: the lakehouse does not exist until publish time.
+    WORKSPACE_PLACEHOLDER = "{{QLIKFAB_WORKSPACE_ID}}"
+    LAKEHOUSE_PLACEHOLDER = "{{QLIKFAB_LAKEHOUSE_ID}}"
+    DATABASE_QUERY = "DatabaseQuery"
+    ONELAKE_DFS_BASE = "https://onelake.dfs.fabric.microsoft.com"
+
+    def _direct_lake_expression(self) -> list:
+        """
+        The shared expression every Direct Lake partition resolves against.
+
+        Direct Lake *on OneLake* is identified by this expression using
+        AzureStorage.DataLake against the lakehouse itself. That matters: the
+        alternative shape, pointing at the SQL analytics endpoint, is Direct
+        Lake on SQL and needs a stored credential. This one runs under the
+        workspace identity -- no gateway, no secret to bind after publishing.
+        """
+        return [
+            "let",
+            '    Source = AzureStorage.DataLake("%s/%s/%s", [HierarchicalNavigation = true])'
+            % (self.ONELAKE_DFS_BASE, self.WORKSPACE_PLACEHOLDER, self.LAKEHOUSE_PLACEHOLDER),
+            "in",
+            "    Source",
+        ]
+
+    def _direct_lake_table(self, safe: str, columns: list, written_types: dict = None) -> dict:
+        """
+        One Direct Lake table.
+
+        `written_types` is what the staged Parquet actually holds. It wins over
+        the type resolved from the .qvf: the model must describe the Delta file
+        it is reading, and a column the migration hoped was numeric but had to
+        write as text is text.
+
+        schemaName is deliberately absent. Whether Delta tables live at
+        `Tables/<name>` or `Tables/<schema>/<name>` is a property of the
+        lakehouse, which does not exist yet; the publisher sets or removes it
+        once Fabric has answered. Guessing here and being wrong does not error
+        -- the partition just resolves to nothing and every measure returns
+        BLANK over a table that visibly has data.
+        """
+        written_types = written_types or {}
+        return {
+            "name": safe,
+            "lineageTag": new_guid(),
+            "columns": [
+                {
+                    "name": name,
+                    "dataType": written_types.get(name) or self.resolver.resolve(name),
+                    "sourceColumn": name,
+                    "lineageTag": new_guid(),
+                }
+                for name in columns
+            ],
+            "measures": [],
+            "partitions": [{
+                "name": safe,
+                "mode": "directLake",
+                "source": {
+                    "type": "entity",
+                    "entityName": safe,
+                    "expressionSource": self.DATABASE_QUERY,
+                },
+            }],
+        }
+
+    def _write_stage(self, staged: list) -> list:
+        """
+        Write each table to Parquet under the staging directory, plus a manifest.
+
+        The publisher reads the manifest rather than globbing the directory, so
+        a partially written stage cannot be mistaken for a complete one.
+        """
+        from parquet_writer import write_parquet
+
+        # generate() runs more than once per migration (semantic model, then
+        # .pbit), and rewriting a 632,000-row Parquet file on the second pass
+        # costs minutes for an identical result.
+        if self.staged_tables:
+            return self.staged_tables
+
+        os.makedirs(self.stage_dir, exist_ok=True)
+        entries = []
+        for safe, columns, rows in staged:
+            types = {name: self.resolver.resolve(name) for name in columns}
+            filename = "%s.parquet" % safe
+            path = os.path.join(self.stage_dir, filename)
+            size, notes, actual = write_parquet(path, columns, rows, types)
+            self.stage_notes.extend(notes)
+            entries.append({
+                "table": safe,
+                "file": filename,
+                "rows": len(rows),
+                "columns": list(columns),
+                "bytes": size,
+                # What the file genuinely holds, so the model can declare it.
+                "types": actual,
+            })
+            print("  [OK] Staged %s: %s row(s), %.2f MB"
+                  % (safe, f"{len(rows):,}", size / 1048576.0))
+
+        manifest = {
+            "workspacePlaceholder": self.WORKSPACE_PLACEHOLDER,
+            "lakehousePlaceholder": self.LAKEHOUSE_PLACEHOLDER,
+            "tables": entries,
+        }
+        with open(os.path.join(self.stage_dir, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+        return entries
+
+    def _generate_direct_lake(self) -> dict:
+        """
+        Build a Direct Lake model over Delta tables staged in a Lakehouse.
+
+        Used instead of embedding whenever rows are staged, because embedding is
+        bounded by the Fabric request body: a 632,000-row fact table is ~103 MB
+        of M and is simply refused. Direct Lake reads the Delta files in place,
+        so table size stops being the migration's problem.
+
+        Every table goes to the lakehouse, including ones whose source could not
+        be read -- those become empty Delta tables. Mixing Direct Lake and
+        import partitions in one model is a compatibility minefield, and a
+        uniform model is worth an empty Parquet file.
+        """
+        model_tables = []
+        query_order = []
+        staged = []
+
+        for table in self.script_tables:
+            safe = safe_name(table.name)
+            payload = self._embedded_for(table.name)
+            if payload:
+                columns = list(payload["columns"])
+                rows = payload["rows"]
+            else:
+                # Unreadable source: real schema, no rows. Same honesty as the
+                # import path, expressed as an empty Delta table.
+                _expr, _status, columns = build_partition_expression(table, self.resolver)
+                rows = []
+            query_order.append(safe)
+            staged.append((safe, columns, rows))
+
+        claimed = {str(t.name).lower() for t in self.script_tables}
+        for name, payload in sorted(self.embedded_data.items()):
+            if str(name).lower() in claimed:
+                continue
+            safe = safe_name(name)
+            query_order.append(safe)
+            staged.append((safe, list(payload["columns"]), payload["rows"]))
+            self.engine_only_tables.append(
+                "`%s` (%s row(s), %d column(s))"
+                % (name, f"{len(payload['rows']):,}", len(payload["columns"])))
+
+        # Written before the tables are described, because the Parquet file --
+        # not the .qvf's field metadata -- decides what type each column really
+        # is. A Direct Lake table reads those files directly, so a model that
+        # declares int64 over a column written as text is describing data that
+        # does not exist. Staging first makes the file the authority.
+        self.staged_tables = self._write_stage(staged)
+        written = {e["table"]: e.get("types") or {} for e in self.staged_tables}
+        staged_rows = {e["table"]: e.get("rows", 0) for e in self.staged_tables}
+
+        for safe, columns, _rows in staged:
+            entry = self._direct_lake_table(safe, columns, written.get(safe, {}))
+            model_tables.append(entry)
+
+            # The audit report is built from this. Left unset it reads as an
+            # empty dict, and every Direct Lake migration reports itself as
+            # zero tables and zero columns over a model that has both.
+            rows = staged_rows.get(safe, 0)
+            self.table_status[safe] = {
+                "status": "connected" if rows else "schema-only",
+                "kind": "lakehouse",
+                "path": "Tables/%s" % safe,
+                "columns": len(entry["columns"]),
+                "dropped": [],
+                "typed_columns": sum(
+                    1 for c in entry["columns"] if c["dataType"] != "string"),
+            }
+
+        self.field_owner = {}
+        self.all_column_names = []
+        for safe, columns, _rows in staged:
+            for column in columns:
+                self.field_owner.setdefault(column.lower(), safe)
+                self.all_column_names.append(column)
+
+        # Measures are built after ownership is known, exactly as the import
+        # path does, so cross-table references can be repointed.
+        for entry, (safe, columns, _rows) in zip(model_tables, staged):
+            entry["measures"] = self._build_measures(None, safe, columns)
+
+        model = {
+            "name": "SemanticModel",
+            "compatibilityLevel": 1606,
+            "model": {
+                "culture": "en-US",
+                "defaultPowerBIDataSourceVersion": "powerBI_V3",
+                "sourceQueryCulture": "en-US",
+                "tables": model_tables,
+                "expressions": [{
+                    "name": self.DATABASE_QUERY,
+                    "kind": "m",
+                    "expression": self._direct_lake_expression(),
+                    "lineageTag": new_guid(),
+                }],
+                "annotations": [
+                    {"name": "PBI_QueryOrder", "value": json.dumps(query_order)},
+                    {"name": "PBI_ProTooling", "value": json.dumps(["DirectLake"])},
+                ],
+            },
+        }
+        return model
+
     def generate(self) -> dict:
         model_tables = []
         query_order = []
+
+        # generate() is called more than once per run (the semantic model and
+        # the .pbit are written from the same source), so anything accumulated
+        # here is reset rather than appended to a previous pass.
+        self.engine_only_tables = []
+
+        if self.stage_dir:
+            return self._generate_direct_lake()
+
+        self._fit_embedded_data()
 
         # Partitions are built for every table first, because a measure can
         # reference a column on any table and must be checked against the
@@ -504,8 +832,45 @@ class UniversalModelGenerator:
         # repointed at a column that does not exist.
         built = []
         for table in self.script_tables:
+            # Rows read from the Qlik engine beat any reference to the original
+            # source: a file path cannot be resolved from the Fabric service,
+            # so a query pointing at one publishes as an empty table.
+            embedded = self._embedded_for(table.name)
+            if embedded:
+                expression = build_embedded_expression(
+                    table.name, embedded["columns"], embedded["rows"],
+                    self.resolver, embedded.get("truncated", False),
+                )
+                built.append((table, safe_name(table.name), expression,
+                              "embedded", list(embedded["columns"])))
+                continue
+
             expression, status, column_names = build_partition_expression(table, self.resolver)
             built.append((table, safe_name(table.name), expression, status, column_names))
+
+        # Tables the engine returned data for that the load-script parser never
+        # produced. The engine is the authority on what the app actually holds
+        # -- a script with resident loads, joins or generated tables can easily
+        # defeat static parsing -- so this data is carried into the model
+        # rather than read and thrown away.
+        claimed = {str(t.name).lower() for t in self.script_tables}
+        for name, payload in sorted(self.embedded_data.items()):
+            if str(name).lower() in claimed:
+                continue
+            synthetic = QlikTable(
+                name=name,
+                fields=[QlikField(name=c) for c in payload["columns"]],
+                source=QlikSource(kind="unknown"),
+            )
+            expression = build_embedded_expression(
+                name, payload["columns"], payload["rows"],
+                self.resolver, payload.get("truncated", False),
+            )
+            built.append((synthetic, safe_name(name), expression,
+                          "embedded", list(payload["columns"])))
+            self.engine_only_tables.append(
+                "`%s` (%s row(s), %d column(s))"
+                % (name, f"{len(payload['rows']):,}", len(payload["columns"])))
 
         self.field_owner = {}
         self.all_column_names = []
@@ -632,6 +997,13 @@ class UniversalModelGenerator:
                         "lineageTag": new_guid(),
                     })
 
+        # Recorded so visuals can only ever project a measure that exists. The
+        # name is otherwise derived twice from the same Qlik expression -- once
+        # here, once when a visual binds to it -- and the two derivations can
+        # disagree, which Power BI reports as Missing_References on a report
+        # that looks fine everywhere else.
+        self.built_measures.setdefault(safe, set()).update(measures)
+
         return list(measures.values())
 
     def _rebind_columns(self, dax: str, measure_name: str, qlik_expr: str) -> str:
@@ -749,6 +1121,11 @@ class UniversalVisualGenerator:
 
         # Populated as visuals are built, surfaced in the audit report.
         self.fidelity_notes = []
+
+        # table -> set of measure names the model genuinely defines. Filled in
+        # by _write_model_bim once model.bim has been generated; empty until
+        # then, which _resolve_measure treats as "cannot check".
+        self.built_measures = {}
 
     @staticmethod
     def _chart_title(chart: dict) -> str:
@@ -905,7 +1282,46 @@ class UniversalVisualGenerator:
                 table = self.field_owner[key]
                 break
         name, _ = self.ai.translate_expression_to_dax(expression, table, self.columns_list)
-        return table, name
+        return self._resolve_measure(table, name, expression)
+
+    def _resolve_measure(self, table: str, measure: str, expression: str):
+        """
+        Pin a projection to a measure the model genuinely contains.
+
+        The measure name is derived twice from one Qlik expression -- when the
+        measure is built, and again here when a visual binds to it -- and the
+        two derivations do not always agree, because they resolve the column's
+        casing against different column lists. Power BI answers a name that
+        does not exist with Missing_References, and the whole visual renders as
+        an error box, so the model's own inventory is the authority.
+        """
+        if not self.built_measures:
+            return table, measure          # inventory unknown; nothing to check
+        if measure in self.built_measures.get(table, ()):
+            return table, measure
+
+        # Built, but attributed to a different table.
+        for owner, names in self.built_measures.items():
+            if measure in names:
+                return owner, measure
+
+        # Never built. A row count always exists and is honest about what it
+        # shows; the alternative is a visual that cannot render at all.
+        fallback = f"Total {table} Rows"
+        if fallback not in self.built_measures.get(table, ()):
+            for owner, names in sorted(self.built_measures.items()):
+                candidate = f"Total {owner} Rows"
+                if candidate in names:
+                    table, fallback = owner, candidate
+                    break
+            else:
+                return table, measure      # nothing to fall back to
+        self.fidelity_notes.append(
+            "No measure was generated for the Qlik expression `%s`, so the visual "
+            "shows `%s` instead. The original expression is in the audit table above."
+            % ((expression or "").replace("\n", " ")[:70], fallback)
+        )
+        return table, fallback
 
     def _get_default_dim(self) -> str:
         """Fall back to the first column of the primary table."""
@@ -1014,13 +1430,16 @@ class UniversalVisualGenerator:
 class UniversalPBIPGenerator:
     """Generates the entire PBIP directory structure dynamically for ANY QVF."""
 
-    def __init__(self, extraction_data: dict, output_dir: str, ai_brain: AIConverterBrain, server: str = None, database: str = "postgres", mode: str = "offline"):
+    def __init__(self, extraction_data: dict, output_dir: str, ai_brain: AIConverterBrain,
+                 server: str = None, database: str = "postgres", mode: str = "offline",
+                 embedded_data: dict = None, data_problems: dict = None,
+                 embed_budget_bytes: int = None, stage_dir: str = None):
         self.data = extraction_data
         self.ai = ai_brain
         self.server = server
         self.database = database
         self.mode = mode
-        
+
         raw_title = extraction_data.get("app_properties", {}).get("title", "Universal_Qlik_Project")
         self.project_name = re.sub(r"[^a-zA-Z0-9_]", "_", raw_title)
         
@@ -1033,7 +1452,11 @@ class UniversalPBIPGenerator:
         # Share one model generator so the report and the semantic model agree
         # on table names, column types and field ownership.
         self.model_gen = UniversalModelGenerator(
-            self.data, self.ai, self.server, self.database, self.mode
+            self.data, self.ai, self.server, self.database, self.mode,
+            embedded_data=embedded_data,
+            data_problems=data_problems,
+            embed_budget_bytes=embed_budget_bytes,
+            stage_dir=stage_dir,
         )
         self.table_name = self.model_gen.table_name
 
@@ -1149,6 +1572,7 @@ class UniversalPBIPGenerator:
         # column that exists in the model it was written against.
         self.vis_gen.columns_list = self.model_gen.all_column_names or ["Column1"]
         self.vis_gen.field_owner = self.model_gen.field_owner
+        self.vis_gen.built_measures = self.model_gen.built_measures
 
     def _write_report_json(self):
         report = {
@@ -1472,6 +1896,58 @@ b'</Types>'
             "",
         ]
 
+        # Everything the live-data path could not carry over, stated plainly.
+        # These are the facts a reader most needs and the ones most easily lost:
+        # a capped table and a complete one look identical in the report.
+        gen = self.model_gen
+        problems = getattr(gen, "data_problems", None) or {}
+        if problems:
+            lines += [
+                "## Tables whose data could not be read",
+                "",
+                "The Qlik engine was asked for these and did not return them, so they",
+                "carry their schema and no rows. Nothing was substituted.",
+                "",
+                "| Table | Reason |",
+                "| --- | --- |",
+            ]
+            for tname, reason in sorted(problems.items()):
+                lines.append("| %s | %s |" % (tname, str(reason).replace("|", "\\|")[:200]))
+            lines.append("")
+
+        size_notes = list(dict.fromkeys(getattr(gen, "size_notes", None) or []))
+        if size_notes:
+            lines += [
+                "## Rows dropped to fit the embedded-data budget",
+                "",
+                "Embedded rows travel inside a single Fabric request, which has a size",
+                "ceiling. These tables did not fit whole:",
+                "",
+            ] + ["- %s" % n for n in size_notes] + [""]
+
+        stage_notes = list(dict.fromkeys(getattr(gen, "stage_notes", None) or []))
+        if stage_notes:
+            lines += [
+                "## Columns written as text",
+                "",
+                "The migration typed these as numeric from the .qvf's field metadata,",
+                "but the values the engine returned would not all parse. They were",
+                "written as text rather than replaced with nulls, so a column of",
+                "strings is visible where silently-missing data would not be.",
+                "",
+            ] + ["- %s" % n for n in stage_notes] + [""]
+
+        engine_only = list(dict.fromkeys(getattr(gen, "engine_only_tables", None) or []))
+        if engine_only:
+            lines += [
+                "## Tables found by the engine but not by the script parser",
+                "",
+                "A load script using resident loads, joins or generated tables can",
+                "defeat static parsing. The engine is the authority on what the app",
+                "actually holds, so these were carried into the model anyway:",
+                "",
+            ] + ["- %s" % n for n in engine_only] + [""]
+
         if schema_only:
             lines += [
                 "## Tables that contain no data",
@@ -1595,7 +2071,16 @@ b'</Types>'
         meass = chart.get("measures", [])
 
         table_name = self.table_name
-        cols_list = self.vis_gen.columns_list if hasattr(self.vis_gen, "columns_list") else ["id", "address", "suburb"]
+        all_cols = self.vis_gen.columns_list if hasattr(self.vis_gen, "columns_list") else ["id", "address", "suburb"]
+
+        # This query has a single From entry, so every Property below is read
+        # against `table_name` alone. A column that exists in the model but on
+        # another table is therefore just as broken here as one that does not
+        # exist at all -- Power BI answers both with Missing_References -- so
+        # the candidate list is narrowed to what this one table actually owns.
+        cols_list = [c for c in all_cols
+                     if self.vis_gen._owner_of(c) == table_name] or all_cols
+
         default_dim = cols_list[0]
         for c in cols_list:
             if not any(id_k in c.lower() for id_k in ["id", "code", "key", "num"]) and any(cat_k in c.lower() for cat_k in ["cat", "region", "country", "name", "title", "genre", "type", "date", "year", "month"]):
@@ -1604,6 +2089,10 @@ b'</Types>'
 
         default_meas = f"Total {table_name} Rows"
 
+        # A field the model does not contain renders as an error box reading
+        # Missing_References, not as an empty visual, so an unresolvable column
+        # falls back to one that exists rather than being passed through as
+        # whatever the Qlik chart happened to name.
         col_name = default_dim
         if dims and dims[0].get("field"):
             raw_col = dims[0]["field"]
@@ -1612,11 +2101,28 @@ b'</Types>'
                     col_name = c
                     break
             else:
-                col_name = str(raw_col)
+                self.vis_gen.fidelity_notes.append(
+                    "The Qlik chart `%s` groups by `%s`, which this report page "
+                    "cannot reach on `%s`, so it groups by `%s` instead."
+                    % (title, raw_col, table_name, default_dim))
 
         meas_name = default_meas
         if meass and meass[0].get("expression"):
-            meas_name, _ = self.ai.translate_expression_to_dax(meass[0]["expression"], table_name, cols_list)
+            expression = meass[0]["expression"]
+            meas_name, _ = self.ai.translate_expression_to_dax(expression, table_name, cols_list)
+            # The same expression is turned into a measure name twice -- once
+            # when the measure is built, once here -- and the two resolve column
+            # casing against different lists, so they can disagree. The model's
+            # own inventory decides; this is the check the PBIR path already
+            # makes and this path was missing.
+            owner, meas_name = self.vis_gen._resolve_measure(
+                table_name, meas_name, expression)
+            if owner != table_name and meas_name != default_meas:
+                self.vis_gen.fidelity_notes.append(
+                    "The Qlik expression `%s` became a measure on `%s`, which this "
+                    "report page cannot reach, so the visual shows `%s` instead."
+                    % ((expression or "").replace("\n", " ")[:70], owner, default_meas))
+                meas_name = default_meas
 
         vis_id = f"visual_{new_guid().replace('-', '')[:16]}"
         col_ref = f"'{table_name}'.{col_name}"
@@ -1719,7 +2225,24 @@ def main():
     parser.add_argument("--server", help="Optional database server override for general-purpose connections")
     parser.add_argument("--database", default="postgres", help="Optional database name override (default: postgres)")
     parser.add_argument("--mode", default="offline", choices=["offline", "live"], help="Data mode: 'offline' (zero-login universal table) or 'live' (database connection) (default: offline)")
-    
+
+    parser.add_argument("--qlik-tenant",
+                        help="Qlik Cloud tenant URL; with --qlik-app-id, reads the app's "
+                             "real rows over the QIX engine and carries them into the model")
+    parser.add_argument("--qlik-app-id",
+                        help="Qlik Cloud app id to read data from (credential comes from "
+                             "QLIK_AUTHORIZATION or QLIK_API_KEY)")
+    parser.add_argument("--max-rows", type=int, default=50000,
+                        help="Cap on rows read per table (default: 50000). Lifted "
+                             "automatically when staging to a Lakehouse.")
+    parser.add_argument("--max-embedded-mb", type=float, default=15.0,
+                        help="Budget for rows embedded in model.bim (default: 15 MB). "
+                             "Fabric refuses a request body much beyond this.")
+    parser.add_argument("--stage-lakehouse", action="store_true",
+                        help="Write rows to Parquet and build a Direct Lake model instead "
+                             "of embedding them. Removes the size ceiling; needs a "
+                             "Storage-audience token at publish time.")
+
     args = parser.parse_args()
 
     # 1. Initialize AI Brain
@@ -1740,9 +2263,78 @@ def main():
     clean_title = re.sub(r"[^a-zA-Z0-9_]", "_", title)
     output_dir = args.output if args.output else f"{clean_title}_AI_PowerBI"
 
-    # 4. Generate Universal PBIP Project
-    generator = UniversalPBIPGenerator(extraction_data, output_dir, ai_brain, server=args.server, database=args.database, mode=args.mode)
+    # 4. Read the app's real rows, when this run came from a live tenant.
+    embedded_data, data_problems = _read_live_data(args, extraction_data)
+
+    # 5. Generate Universal PBIP Project
+    generator = UniversalPBIPGenerator(
+        extraction_data, output_dir, ai_brain,
+        server=args.server, database=args.database, mode=args.mode,
+        embedded_data=embedded_data, data_problems=data_problems,
+        embed_budget_bytes=int(args.max_embedded_mb * 1024 * 1024),
+        stage_dir=os.path.join(output_dir, "lakehouse") if args.stage_lakehouse else None,
+    )
     generator.generate()
+
+
+def _read_live_data(args, extraction_data):
+    """
+    Pull each table's rows from the Qlik engine, when a tenant was supplied.
+
+    A file-backed M query cannot run in the Fabric service, so without this the
+    published model is always empty. The API key is read from the environment
+    rather than argv, which would expose it in the process list.
+
+    Failure here is never fatal: the migration continues and every table that
+    could not be read keeps the partition it would otherwise have had, with the
+    reason recorded for the audit report.
+    """
+    if not (args.qlik_tenant and args.qlik_app_id):
+        return {}, {}
+
+    authorization = os.environ.get("QLIK_AUTHORIZATION") or os.environ.get("QLIK_API_KEY")
+    if not authorization:
+        print("  [WARN] --qlik-tenant was given but neither QLIK_AUTHORIZATION nor "
+              "QLIK_API_KEY is set; no data will be read.")
+        return {}, {"(all tables)": "No Qlik credential was available to this process."}
+    if not authorization.lower().startswith("bearer "):
+        authorization = "Bearer %s" % authorization
+
+    tables = (extraction_data.get("data_model") or {}).get("tables") or []
+    table_names = [t.get("name") for t in tables if t.get("name")]
+
+    # An empty list is not "nothing to read": plenty of .qvf files carry no
+    # data-model metadata and had their fields recovered from the load script.
+    # The reader falls back to whatever the engine itself reports.
+    #
+    # The row cap exists because embedded rows have to fit in a Fabric request
+    # body. Staging to a Lakehouse has no such ceiling, so the cap is lifted
+    # there unless the caller asked for one explicitly.
+    max_rows = args.max_rows
+    if args.stage_lakehouse and "--max-rows" not in sys.argv:
+        max_rows = None
+        print("\n  Staging to a Lakehouse, so no row cap is applied.")
+
+    print("\n  Reading data for %s table(s) from the Qlik engine..."
+          % (len(table_names) if table_names else "all"))
+    try:
+        from qlik_data_reader import read_app_tables
+        data, problems = read_app_tables(
+            args.qlik_tenant, args.qlik_app_id, authorization, table_names,
+            max_rows=max_rows, note=lambda text: print("  " + text),
+        )
+    except Exception as err:            # noqa: BLE001 - reported, never fatal
+        print(f"  [WARN] Could not read data from the tenant: {err}")
+        return {}, {"(all tables)": str(err)}
+
+    total = sum(len(d["rows"]) for d in data.values())
+    # "Read", not "embedded": the size budget is applied later, during model
+    # generation, and may still trim a table. Claiming a row count here that a
+    # later step reduces would overstate what actually reached Fabric.
+    print(f"  [OK] Read {total:,} row(s) across {len(data)} table(s); "
+          f"{len(problems)} table(s) could not be read. "
+          f"The audit report states what was finally embedded.")
+    return data, problems
 
 
 if __name__ == "__main__":

@@ -490,6 +490,113 @@ def build_partition_expression(table, resolver: TypeResolver) -> tuple:
     return _build_unavailable(table, resolver, reason), "schema-only", table.field_names
 
 
+# ----------------------------------------------------------------------
+# Rows read from the Qlik engine, carried in the model itself
+# ----------------------------------------------------------------------
+
+def _parses_as(value, tabular_type) -> bool:
+    """Whether one non-null value can be written as `tabular_type` losslessly."""
+    text = str(value).strip()
+    try:
+        if tabular_type == TYPE_INT64:
+            int(text)
+        elif tabular_type == TYPE_DOUBLE:
+            float(text)
+        else:
+            return True
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def embedded_column_types(columns: list, rows: list, resolver: TypeResolver) -> dict:
+    """
+    The type each embedded column can actually be written as.
+
+    The resolver says what the .qvf claimed. This says what the rows support.
+    A column the migration typed numeric but which holds one unparseable value
+    is written as text for its whole length, because the alternative -- coercing
+    that value to null -- turns a visible wrong value into invisible missing
+    data. The disagreement is the caller's to report.
+
+    QIX hands every value over as text (Qlik's own formatted representation),
+    so a thousands separator or a currency symbol is exactly how a genuinely
+    numeric column ends up here as text. That is a fidelity loss worth naming
+    rather than papering over.
+    """
+    effective = {}
+    for index, name in enumerate(columns):
+        declared = resolver.resolve(name)
+        if declared not in (TYPE_INT64, TYPE_DOUBLE):
+            effective[name] = TYPE_STRING if declared != TYPE_STRING else TYPE_STRING
+            continue
+        for row in rows:
+            value = row[index] if index < len(row) else None
+            if value is None or value == "":
+                continue
+            if not _parses_as(value, declared):
+                declared = TYPE_STRING
+                break
+        effective[name] = declared
+    return effective
+
+
+def _m_value(value, tabular_type) -> str:
+    """One cell as an M literal."""
+    if value is None or value == "":
+        return "null"
+    if tabular_type == TYPE_INT64:
+        return str(int(str(value).strip()))
+    if tabular_type == TYPE_DOUBLE:
+        return repr(float(str(value).strip()))
+    return '"%s"' % escape_m_string(value)
+
+
+def build_embedded_expression(table_name: str, columns: list, rows: list,
+                              resolver: TypeResolver, truncated: bool = False) -> list:
+    """
+    An M query that carries the rows themselves, as a #table literal.
+
+    Why the rows travel inside the model at all: the Fabric service cannot open
+    a file path on the machine that ran the migration, so a query pointing at
+    the original CSV publishes as an empty table. Rows read from the Qlik engine
+    are the only thing that survives the trip.
+
+    The declared type literal is built from `embedded_column_types`, not from
+    the resolver directly, so the table's declared schema always matches the
+    values written beneath it. Declaring Int64 over a value written as text is
+    not a cosmetic mismatch -- the mashup engine fails the whole document.
+    """
+    types = embedded_column_types(columns, rows, resolver)
+    schema = "type table [" + ", ".join(
+        "%s = %s" % (escape_m_identifier(name), _M_TYPES.get(types[name], "type text"))
+        for name in columns
+    ) + "]"
+
+    lines = [
+        "// %d row(s) read from the Qlik engine for %s." % (len(rows), table_name),
+    ]
+    if truncated:
+        lines.append(
+            "// Capped by the embedded-size budget; this is not the whole table.")
+    lines += ["let", "    Source = #table("]
+    lines.append("        %s," % schema)
+    if not rows:
+        lines.append("        {}")
+    else:
+        lines.append("        {")
+        for position, row in enumerate(rows):
+            cells = ", ".join(
+                _m_value(row[i] if i < len(row) else None, types[name])
+                for i, name in enumerate(columns)
+            )
+            comma = "" if position == len(rows) - 1 else ","
+            lines.append("            {%s}%s" % (cells, comma))
+        lines.append("        }")
+    lines += ["    )", "in", "    Source"]
+    return lines
+
+
 def default_root_for(script_tables: list) -> str:
     """Pick a sensible default for the DataSourceRoot parameter."""
     for table in script_tables:

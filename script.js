@@ -2711,9 +2711,19 @@ ${(appData.gaps && appData.gaps.length)
 
         appendLogToAgent("gen", "—", `[publish] Publishing "${escapeHtml(baseName)}" to ${escapeHtml(destination.workspace)}…`);
         try {
+            // Two tokens, deliberately. The Fabric API takes the first; OneLake
+            // accepts only Storage-audience tokens and answers the Fabric one
+            // with a bare 401. Absent unless the connection obtained it, in
+            // which case a Direct Lake project reports what is missing.
+            const publishHeaders = {
+                "Authorization": `Bearer ${fabricConnection.accessToken}`
+            };
+            if (fabricConnection.storageToken) {
+                publishHeaders["X-Storage-Authorization"] = `Bearer ${fabricConnection.storageToken}`;
+            }
             const response = await fetch(`/api/runs/${run.id}/publish?${params}`, {
                 method: "POST",
-                headers: { "Authorization": `Bearer ${fabricConnection.accessToken}` }
+                headers: publishHeaders
             });
             let body = {};
             try {
@@ -3652,6 +3662,7 @@ ${(appData.gaps && appData.gaps.length)
     // corrected, and multi-line Entra/Qlik errors are unreadable in one.
     const CONN_STATUS_ICON = {
         error: "fa-circle-exclamation",
+        warning: "fa-triangle-exclamation",
         success: "fa-circle-check",
         info: "fa-circle-info"
     };
@@ -3929,6 +3940,29 @@ ${(appData.gaps && appData.gaps.length)
                     clientSecret: clientSecret
                 });
 
+                // A second token, for the Storage audience, obtained now because
+                // the secret is only in hand during this exchange — it is never
+                // retained, so it cannot be minted later at publish time.
+                // OneLake accepts Storage-audience tokens and nothing else.
+                let storageToken = null;
+                let storageProblem = "";
+                try {
+                    const storage = await fetchFabricToken({
+                        tenantId: tenantId,
+                        clientId: clientId,
+                        clientSecret: clientSecret,
+                        scope: "https://storage.azure.com/.default"
+                    });
+                    storageToken = storage.accessToken;
+                } catch (storageErr) {
+                    // Not fatal — a small app that embeds its rows never needs
+                    // this. But it is reported here rather than only in the
+                    // console: without it a migration runs to completion, which
+                    // can be several minutes, and only then fails to publish.
+                    console.warn("No OneLake (Storage) token:", storageErr);
+                    storageProblem = storageErr.message || String(storageErr);
+                }
+
                 btnTestFabric.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Loading workspaces...';
                 const workspaces = await fetchFabricWorkspaces(token.accessToken);
 
@@ -3964,6 +3998,7 @@ ${(appData.gaps && appData.gaps.length)
                     tenantId: tenantId,
                     clientId: clientId,
                     accessToken: token.accessToken,
+                    storageToken: storageToken,
                     expiresAt: token.expiresAt,
                     workspaces: usable
                 };
@@ -3973,8 +4008,17 @@ ${(appData.gaps && appData.gaps.length)
                 document.getElementById("fabric-extra-fields").style.display = "block";
                 btnTestFabric.style.display = "none";
 
-                setConnStatus("fabric-status", "success",
-                    `Connected. Loaded ${usable.length} workspace${usable.length === 1 ? "" : "s"} — pick the destination below.`);
+                const connected = `Connected. Loaded ${usable.length} workspace${usable.length === 1 ? "" : "s"} — pick the destination below.`;
+                if (storageToken) {
+                    setConnStatus("fabric-status", "success",
+                        `${connected}\nOneLake access confirmed — large tables will be staged to a Lakehouse.`);
+                } else {
+                    // Said now, not after a migration that may run for minutes.
+                    setConnStatus("fabric-status", "warning",
+                        `${connected}\n\nNo OneLake (Storage) token could be obtained, so an app whose ` +
+                        `data is staged to a Lakehouse cannot be published. Small apps that embed ` +
+                        `their rows are unaffected.\n\n${storageProblem}`);
+                }
             } catch (err) {
                 console.error(err);
                 if (err.name === "TypeError") {
