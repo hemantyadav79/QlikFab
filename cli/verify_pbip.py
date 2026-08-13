@@ -50,6 +50,39 @@ def bad_m_literals(expr):
             problems.append(f'raw control character in M literal {literal[:60]!r}')
     if '#""' in expr:
         problems.append('empty quoted identifier #"" in M expression')
+
+    # Duplicate fields in a record type. `type table [#"X" = ..., #"X" = ...]`
+    # is rejected outright, and the message names neither the table nor the
+    # column -- it surfaces as the same bare "Token ',' expected".
+    for literal in re.findall(r'type table \[(.*?)\]', expr, re.DOTALL):
+        names = re.findall(r'#"((?:[^"]|"")*)"\s*=', literal)
+        seen, duplicated = set(), set()
+        for name in names:
+            if name in seen:
+                duplicated.add(name)
+            seen.add(name)
+        for name in sorted(duplicated):
+            problems.append(f'duplicate column {name!r} in an M record type')
+
+    return problems
+
+
+def m_lines_are_single_lines(expr_lines):
+    """
+    Every element of a partition's expression array must be one physical line.
+
+    TMSL joins the array with newlines, so an element that already contains one
+    silently splits into two. When the element is a `//` comment -- and the
+    generated M comments quote source paths, SQL and error text -- the comment
+    ends at that newline and everything after it is parsed as code. Fabric
+    reports it as "Token ',' expected" pointing at a line no one wrote.
+    """
+    problems = []
+    for index, line in enumerate(expr_lines):
+        if isinstance(line, str) and ('\n' in line or '\r' in line):
+            problems.append(
+                f'expression line {index} contains a newline, which splits it in two '
+                f'and lets a // comment swallow the following code: {line[:60]!r}')
     return problems
 
 
@@ -117,6 +150,12 @@ def check(project_dir):
                 fails.append(f'{name}/{t["name"]}: partition has neither an M expression '
                              f'nor a Direct Lake entity')
                 continue
+            # Checked before joining: once the lines are concatenated, a line
+            # that already held a newline is indistinguishable from two lines.
+            if isinstance(expr, list):
+                for problem in m_lines_are_single_lines(expr):
+                    fails.append(f'{name}/{t["name"]}: {problem}')
+
             expr = expr if isinstance(expr, str) else '\n'.join(expr)
 
             # Fabricated-data regression guard.

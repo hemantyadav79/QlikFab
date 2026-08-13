@@ -734,6 +734,23 @@ html[data-theme="dark"] .theme-toggle__thumb {
     color: var(--text-strong);
 }
 
+/*
+  The source card's header: title on one line, platform picker beneath it. The
+  picker is deliberately at the top of the card rather than beside the run
+  button — it decides what every field below it means, so it has to be read
+  first.
+*/
+.source-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 4px;
+}
+
+.source-picker .source-select-group {
+    margin-bottom: 0;
+}
+
 /* The primary card carries a subtle accent edge to lead the eye */
 .primary-card {
     border-top: 3px solid var(--accent);

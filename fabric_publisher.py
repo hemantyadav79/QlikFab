@@ -129,7 +129,56 @@ def _collect_parts(item_dir, overrides=None):
     return parts
 
 
-def _await_operation(operation_url, token, note, what):
+def _mashup_from_parts(parts):
+    """The model.bim being uploaded, decoded, or None.
+
+    Kept so that if Fabric rejects the mashup this module can say *which* table's
+    query is at fault. Fabric's own message never does.
+    """
+    for part in parts or []:
+        if part.get("path", "").lower().endswith("model.bim"):
+            try:
+                return json.loads(base64.b64decode(part["payload"]).decode("utf-8"))
+            except Exception:               # noqa: BLE001 - diagnosis is best-effort
+                return None
+    return None
+
+
+def _mashup_diagnosis(message, model):
+    """Names the partitions whose M could be behind an M Engine error.
+
+    Fabric answers a malformed mashup document with a parser message and no
+    location -- "Token ',' expected." names neither the table nor the line, and
+    the document it refers to is the concatenation of every partition, so the
+    offending query could be any of them. Printing each table's query here is
+    the difference between a five-minute fix and an afternoon of guessing.
+    """
+    if not model or "m engine error" not in (message or "").lower():
+        return ""
+
+    blocks = []
+    for table in (model.get("model") or {}).get("tables") or []:
+        for partition in table.get("partitions") or []:
+            expression = (partition.get("source") or {}).get("expression")
+            if expression is None:
+                continue
+            if isinstance(expression, list):
+                text = "\n".join(expression)
+            else:
+                text = str(expression)
+            blocks.append("--- %s ---\n%s" % (table.get("name", "(unnamed)"), text))
+
+    if not blocks:
+        return ""
+
+    return (
+        "\n\nFabric rejected the Power Query document but did not say where. "
+        "Every table's query is below; the fault is in one of them.\n\n"
+        + "\n\n".join(blocks)[:6000]
+    )
+
+
+def _await_operation(operation_url, token, note, what, mashup_source=None):
     """
     Follows a 202 to its conclusion. Returns the created item's id.
 
@@ -186,9 +235,10 @@ def _await_operation(operation_url, token, note, what):
                     "duplicate." % (what, err.reason))
         if status == "failed":
             error = state.get("error") or {}
+            message = error.get("message") or json.dumps(error)[:300] or "no reason given"
             raise RuntimeError(
-                "Fabric could not create %s: %s"
-                % (what, error.get("message") or json.dumps(error)[:300] or "no reason given")
+                "Fabric could not create %s: %s%s"
+                % (what, message, _mashup_diagnosis(message, mashup_source))
             )
         note("[publish] %s — Fabric reports '%s'…" % (what, status or "running"))
 
@@ -229,7 +279,8 @@ def _create_item(workspace_id, token, display_name, item_type, parts, note):
         raise RuntimeError("Could not reach Fabric to create the %s: %s" % (item_type, err.reason))
 
     if status == 202 and location:
-        return _await_operation(location, token, note, "the %s" % item_type)
+        return _await_operation(location, token, note, "the %s" % item_type,
+                                mashup_source=_mashup_from_parts(parts))
 
     body = json.loads(raw) if raw else {}
     item_id = body.get("id")

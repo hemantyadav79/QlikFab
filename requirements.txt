@@ -17,3 +17,13 @@ websocket-client>=1.6
 # Parquet writer, for staging large tables into a Fabric Lakehouse
 # (--stage-lakehouse / any tenant-sourced run).
 pyarrow>=14
+
+# Reader for the .hyper extracts bundled inside a .twbx, so a migrated Tableau
+# workbook carries its rows and not just its schema.
+#
+# OPTIONAL, and deliberately last: it is a large native package, and a Tableau
+# workbook on a live database connection has no extract for it to read. Without
+# it, such a migration still completes -- the model is built with structure
+# only, and the audit report says so per table rather than leaving the empty
+# result unexplained. Qlik migrations never need it.
+tableauhyperapi>=0.0.14000 ; python_version >= "3.8"

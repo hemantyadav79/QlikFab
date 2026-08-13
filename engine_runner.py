@@ -31,6 +31,8 @@ import threading
 import time
 import uuid
 
+import tableau_client
+
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 CLI_DIR = os.path.join(PROJECT_ROOT, "cli")
 ENGINE_SCRIPT = os.path.join(CLI_DIR, "ai_qvf_to_powerbi.py")
@@ -192,21 +194,44 @@ def classify(line):
     return None
 
 
-def safe_stem(name):
-    """A filesystem-safe stem for an uploaded name, never empty, never a path."""
+# The artefact extension each source produces. A Tableau download may arrive as
+# either, and the distinction matters downstream: .twbx is a zip carrying the
+# .twb, while a .twb is the XML on its own.
+# Whether to pull a Tableau workbook's extract along with it. On by default
+# because the extract is the only data a .twbx carries; an operator migrating
+# live-connection workbooks over a slow link can turn it off, at the cost of a
+# model with no rows.
+INCLUDE_TABLEAU_EXTRACT = os.environ.get("TABLEAU_INCLUDE_EXTRACT", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
+
+SOURCE_EXTENSIONS = {
+    "qlik": (".qvf",),
+    "tableau": (".twbx", ".twb"),
+}
+
+
+def safe_stem(name, source_platform="qlik"):
+    """A filesystem-safe stem for a source name, never empty, never a path.
+
+    The extension is appended only when the name does not already carry one the
+    platform uses, so a real filename keeps whichever it arrived with.
+    """
     base = os.path.basename(name or "")
     stem = re.sub(r"[^A-Za-z0-9 ._-]", "_", base).strip() or "upload"
-    if not stem.lower().endswith(".qvf"):
-        stem += ".qvf"
+    extensions = SOURCE_EXTENSIONS.get((source_platform or "qlik").lower(), (".qvf",))
+    if not stem.lower().endswith(extensions):
+        stem += extensions[0]
     return stem
 
 
 class MigrationRun:
     """One engine invocation over one .qvf, with its real output captured."""
 
-    def __init__(self, filename, payload=None):
+    def __init__(self, filename, payload=None, source_platform="qlik"):
         self.id = uuid.uuid4().hex[:12]
-        self.filename = safe_stem(filename)
+        self.source_platform = (source_platform or "qlik").strip().lower()
+        self.filename = safe_stem(filename, self.source_platform)
         self.created_at = time.time()
         self.status = "queued"          # queued | running | completed | failed
         self.exit_code = None
@@ -274,6 +299,7 @@ class MigrationRun:
             return {
                 "id": self.id,
                 "filename": self.filename,
+                "sourcePlatform": self.source_platform,
                 "status": self.status,
                 "exitCode": self.exit_code,
                 "error": self.error,
@@ -311,6 +337,56 @@ class MigrationRun:
             daemon=True,
         ).start()
 
+    def start_from_tableau(self, server_url, pat_name, pat_secret, site, workbook_id):
+        """Downloads the workbook from Tableau, then runs the engine on it.
+
+        Same shape as start_from_qlik, and same reason: the artefact goes
+        Tableau -> here -> engine, never out to the browser and back.
+        """
+        threading.Thread(
+            target=self._download_tableau_then_run,
+            args=(server_url, pat_name, pat_secret, site, workbook_id),
+            daemon=True,
+        ).start()
+
+    def _download_tableau_then_run(self, server_url, pat_name, pat_secret, site, workbook_id):
+        self.status = "exporting"
+        try:
+            self.preflight()
+            size, filename = tableau_client.fetch_workbook(
+                server_url, pat_name, pat_secret, workbook_id, self.input_path,
+                site_content_url=site,
+                # The extract is the workbook's data. Without it the published
+                # model has structure and no rows, which is the same dead end
+                # the Qlik path avoids by reading the app over QIX.
+                include_extract=INCLUDE_TABLEAU_EXTRACT,
+                note=self.note,
+                free_space_check=lambda directory: require_free_space(
+                    directory, MIN_FREE_BYTES, self.note),
+            )
+        except Exception as err:      # noqa: BLE001 - reported to the UI verbatim
+            self.status = "failed"
+            self.error = str(err)
+            self.note("[export] %s" % err)
+            return
+
+        # Tableau names the file, and the extension decides how it is parsed.
+        # A workbook saved without an extract comes back as a bare .twb, so the
+        # local name is corrected to match what actually arrived rather than
+        # what was assumed when the run was created.
+        actual = safe_stem(filename, "tableau")
+        if actual.lower().endswith(".twb") and self.filename.lower().endswith(".twbx"):
+            corrected = os.path.join(self.work_dir, actual)
+            try:
+                os.replace(self.input_path, corrected)
+                self.input_path = corrected
+                self.filename = actual
+            except OSError as err:
+                self.note("[export] Could not rename to %s (%s); continuing." % (actual, err))
+
+        self.note("[export] Wrote %.2f MB to %s" % (size / 1048576.0, self.filename))
+        self._run()
+
     def _export_then_run(self, tenant, app_id, authorization):
         self.status = "exporting"
         try:
@@ -337,12 +413,23 @@ class MigrationRun:
             self.note("[runner] %s" % self.error)
             return
 
+        # Which flag names the input file. A Tableau workbook handed to --qvf
+        # would be opened as a Qlik app and fail somewhere deep in the parser
+        # with a message about zlib streams, so the platform is settled here.
+        source_flag = {"qlik": "--qvf", "tableau": "--twbx"}.get(self.source_platform)
+        if not source_flag:
+            self.status = "failed"
+            self.error = ("No engine input is defined for source platform %r."
+                          % self.source_platform)
+            self.note("[runner] %s" % self.error)
+            return
+
         self.status = "running"
         command = [
             sys.executable,
             "-u",                       # unbuffered, so the UI sees output as it happens
             ENGINE_SCRIPT,
-            "--qvf", self.input_path,
+            source_flag, self.input_path,
             "--output", self.output_dir,
         ]
 
@@ -424,14 +511,18 @@ class MigrationRun:
         self._drop_source_file()
 
     def _drop_source_file(self):
+        # Named after what was actually downloaded: reporting a Tableau
+        # workbook as a ".qvf" makes the log read as though the wrong file
+        # were migrated.
+        label = os.path.splitext(self.filename)[1] or "source file"
         try:
             if self.input_path and os.path.exists(self.input_path):
                 freed = os.path.getsize(self.input_path)
                 os.remove(self.input_path)
-                self.note("[cleanup] Released the source .qvf (%s)." % human_bytes(freed))
+                self.note("[cleanup] Released the source %s (%s)." % (label, human_bytes(freed)))
         except OSError as err:
             # Not worth failing a finished run over; the dir is swept later.
-            self.note("[cleanup] Could not release the source .qvf: %s" % err)
+            self.note("[cleanup] Could not release the source %s: %s" % (label, err))
 
     def _find_artifact(self):
         """The PBIP zip the engine wrote, or None. Never fabricated."""
@@ -663,8 +754,8 @@ class RunStore:
         self._keep = keep
         self._lock = threading.Lock()
 
-    def create(self, filename, payload=None):
-        run = MigrationRun(filename, payload)
+    def create(self, filename, payload=None, source_platform="qlik"):
+        run = MigrationRun(filename, payload, source_platform)
         with self._lock:
             self._runs[run.id] = run
             self._order.append(run.id)

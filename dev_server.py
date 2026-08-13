@@ -34,6 +34,7 @@ import tempfile
 
 import engine_runner
 import fabric_publisher
+import tableau_client
 
 # Serve the project regardless of where the launcher happened to be standing.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -113,6 +114,14 @@ RUNS_PATH = "/api/runs"
 # Exports a live Qlik Cloud app and runs the engine on it, all server-side, so
 # the .qvf never travels out to the browser and back.
 RUNS_FROM_QLIK_PATH = "/api/runs/from-qlik"
+# The same, for a Tableau Server / Cloud workbook. Separate from the Qlik route
+# because the two sign-ins have nothing in common: Qlik takes a bearer token on
+# every call, Tableau exchanges a PAT for a session token and a site id first.
+RUNS_FROM_TABLEAU_PATH = "/api/runs/from-tableau"
+# Signs in to Tableau, lists the workbooks the token can see, signs out, and
+# answers JSON. Server-side so the browser never parses Tableau's XML nor holds
+# a session token; the PAT is used for the call and not stored.
+TABLEAU_WORKBOOKS_PATH = "/api/tableau/workbooks"
 
 # Kept deliberately narrow: each relay must forward to its own service and
 # nothing else, so a stray link cannot turn the dev server into an open relay.
@@ -155,6 +164,12 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
             return
         if path == RUNS_FROM_QLIK_PATH:
             self.handle_run_from_qlik()
+            return
+        if path == TABLEAU_WORKBOOKS_PATH:
+            self.handle_tableau_workbooks()
+            return
+        if path == RUNS_FROM_TABLEAU_PATH:
+            self.handle_run_from_tableau()
             return
         if path == RUNS_PATH:
             self.handle_run_start()
@@ -394,6 +409,121 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(502, {"proxyError": "Could not reach the tenant: %s" % err.reason})
         except Exception as err:  # noqa: BLE001 - the dev server must not die on one bad call
             self.send_json(502, {"proxyError": "Proxy failure: %s" % err})
+
+    # ------------------------------------------------------------------
+    # Tableau
+    # ------------------------------------------------------------------
+
+    def read_credential_body(self):
+        """Reads a small JSON credential body, or answers and returns None.
+
+        Credentials travel in the body rather than the query string on purpose:
+        a query string lands in server logs, browser history and Referer
+        headers, and a Personal Access Token must not.
+        """
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_BODY_BYTES:
+            self.send_json(400, {"error": "Expected a small JSON body with the credentials."})
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            self.send_json(400, {"error": "The credential body was not valid JSON."})
+            return None
+
+    def handle_tableau_workbooks(self):
+        """Lists the workbooks a Personal Access Token can see.
+
+        Signs in, lists, signs out — all within this one request. Nothing about
+        the session outlives it, so there is no token for the browser to hold
+        and none for this server to leak.
+        """
+        payload = self.read_credential_body()
+        if payload is None:
+            return
+
+        server_url = str(payload.get("serverUrl") or "").strip()
+        pat_name = str(payload.get("patName") or "").strip()
+        pat_secret = str(payload.get("patSecret") or "")
+        site = str(payload.get("site") or "").strip()
+
+        missing = [label for label, value in
+                   (("serverUrl", server_url), ("patName", pat_name), ("patSecret", pat_secret))
+                   if not value]
+        if missing:
+            self.send_json(400, {"error": "Missing %s." % ", ".join(missing)})
+            return
+
+        # A host this server will not talk to is a request problem, not an
+        # upstream failure — answered as 400 here so it reads the same as it
+        # does on the run route rather than looking like Tableau misbehaved.
+        try:
+            tableau_client.validate_host(server_url)
+        except tableau_client.TableauError as err:
+            self.send_json(400, {"error": str(err)})
+            return
+
+        session = None
+        try:
+            session = tableau_client.sign_in(server_url, pat_name, pat_secret, site)
+            workbooks = tableau_client.list_workbooks(session)
+        except tableau_client.TableauError as err:
+            # The operator's own words from Tableau, not this relay's guess.
+            self.send_json(502, {"error": str(err)})
+            return
+        except Exception as err:  # noqa: BLE001 - the dev server must not die on one bad call
+            self.send_json(502, {"error": "Tableau call failed: %s" % err})
+            return
+        finally:
+            if session:
+                tableau_client.sign_out(session)
+
+        self.send_json(200, {
+            "site": session.site_content_url or "Default",
+            "apiVersion": session.api_version,
+            "workbooks": workbooks,
+        })
+
+    def handle_run_from_tableau(self):
+        """Starts a run whose source is a Tableau Server / Cloud workbook.
+
+        The PAT arrives in the body, is used for the download, and is not
+        stored or logged.
+        """
+        payload = self.read_credential_body()
+        if payload is None:
+            return
+
+        server_url = str(payload.get("serverUrl") or "").strip()
+        pat_name = str(payload.get("patName") or "").strip()
+        pat_secret = str(payload.get("patSecret") or "")
+        site = str(payload.get("site") or "").strip()
+        workbook_id = str(payload.get("workbookId") or "").strip()
+        name = str(payload.get("name") or "").strip() or workbook_id
+
+        missing = [label for label, value in
+                   (("serverUrl", server_url), ("patName", pat_name),
+                    ("patSecret", pat_secret), ("workbookId", workbook_id))
+                   if not value]
+        if missing:
+            self.send_json(400, {"error": "Missing %s." % ", ".join(missing)})
+            return
+
+        # Rejected here rather than after a run has been created, so a bad host
+        # never produces an orphaned run row the user has to make sense of.
+        try:
+            tableau_client.validate_host(server_url)
+        except tableau_client.TableauError as err:
+            self.send_json(400, {"error": str(err)})
+            return
+
+        run = engine_runner.STORE.create(name, payload=None, source_platform="tableau")
+        _warn_if_stale(run)
+        run.start_from_tableau(server_url, pat_name, pat_secret, site, workbook_id)
+        self.send_json(202, run.snapshot())
 
     def handle_fabric_token(self):
         """Client-credentials exchange for a Fabric service principal.

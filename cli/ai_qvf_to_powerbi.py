@@ -23,9 +23,11 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from qlik_script_parser import parse_load_script, QlikTable, QlikField, QlikSource
+from qlik_script_parser import parse_load_script
+from source_model import SourceField, SourceRelation, SourceTable, TableOrigin
 from powerquery_builder import (
     TypeResolver,
+    unavailable_description,
     build_embedded_expression,
     build_partition_expression,
     build_root_parameter_expression,
@@ -59,6 +61,32 @@ class AIConverterBrain:
     # these to the front; the rest still follow as fallbacks.
     TIER_ORDER = ("groq", "gemini", "ollama")
 
+    # Per-dialect prompt guidance. The two expression languages differ enough
+    # that one shared prompt degrades both: a model told only "translate this
+    # expression" reads Tableau's {FIXED …} as a record constructor and Qlik's
+    # {<Year={2024}>} as a set literal, and quietly emits DAX that computes
+    # something else. The notes name the constructs that actually mistranslate.
+    DIALECT_NOTES = {
+        "qlik": (
+            "Qlik notes:\n"
+            "- Set analysis {<Field={value}>} is a filter context: express it with CALCULATE.\n"
+            "- Aggr(...) computes at a grain: express it with SUMMARIZE or an iterator.\n"
+            "- Qlik's if() is DAX IF(); alt(x, y) is COALESCE(x, y).\n"
+        ),
+        "tableau": (
+            "Tableau notes:\n"
+            "- A Level-of-Detail expression {FIXED [A] : SUM([B])} ignores the visual's\n"
+            "  own grouping: express it as CALCULATE(SUM(...), ALLEXCEPT(table, [A])).\n"
+            "  {INCLUDE ...} and {EXCLUDE ...} adjust the current grain instead.\n"
+            "- IF/ELSEIF/THEN/END maps to IF(...) or SWITCH(TRUE(), ...); IIF is IF.\n"
+            "- ZN(x) is COALESCE(x, 0). IFNULL(x, y) is COALESCE(x, y).\n"
+            "- Table calculations (WINDOW_SUM, INDEX, RANK, LOOKUP, TOTAL, RUNNING_SUM)\n"
+            "  depend on the visual's layout, which DAX has no direct equal for. If the\n"
+            "  expression uses one, do NOT approximate it — return the measure name with\n"
+            "  a dax_expression of exactly: NEEDS_MANUAL_REVIEW\n"
+        ),
+    }
+
     def __init__(
         self,
         provider="groq",
@@ -69,8 +97,17 @@ class AIConverterBrain:
         groq_model="llama-3.3-70b-versatile",
         gemini_model="gemini-2.0-flash",
         ollama_model="llama3.2",
-        ollama_url="http://localhost:11434/api/generate"
+        ollama_url="http://localhost:11434/api/generate",
+        dialect="qlik"
     ):
+        # Which expression language the source writes in. It selects the prompt
+        # guidance only — the tier chain, caching and fallbacks are identical.
+        self.dialect = (dialect or "qlik").strip().lower()
+        if self.dialect not in self.DIALECT_NOTES:
+            self.dialect = "qlik"
+        self.dialect_label = "Tableau" if self.dialect == "tableau" else "Qlik"
+        self.dialect_notes = self.DIALECT_NOTES[self.dialect]
+
         # `provider`, `model` and `api_key` are the CLI's vocabulary and are kept
         # so --provider/--model/--api-key mean something. They select and
         # configure the first tier; the remaining tiers stay as fallbacks.
@@ -224,10 +261,12 @@ class AIConverterBrain:
 
         # 5. ROBUST MULTI-TIERED AI FALLBACK PIPELINE
         prompt = (
-            f"You are a Power BI DAX expert. Translate this Qlik expression into a Power BI DAX formula.\n"
+            f"You are a Power BI DAX expert. Translate this {self.dialect_label} expression "
+            f"into a Power BI DAX formula.\n"
             f"Table name: {table_name}\n"
             f"Available columns in table: {', '.join(sample_columns[:15])}\n"
-            f"Qlik Expression: {qlik_expr}\n\n"
+            f"{self.dialect_notes}"
+            f"{self.dialect_label} Expression: {qlik_expr}\n\n"
             f"Return ONLY a valid JSON object in this format (no markdown, no explanation):\n"
             f'{{"measure_name": "Short descriptive name", "dax_expression": "VALID DAX FORMULA"}}'
         )
@@ -259,14 +298,23 @@ class AIConverterBrain:
 
         if res and "measure_name" in res and "dax_expression" in res:
             dax = res["dax_expression"].strip()
-            dax = re.sub(r"^[\s=\[]+|[\s\]]+$", "", dax)
-            dax = re.sub(r"COUNTX\s*\(\s*'?([a-zA-Z0-9_]+)'?\s*,\s*'?([a-zA-Z0-9_]+)'?\s*\)", r"COUNTA('\1'[\2])", dax, flags=re.IGNORECASE)
-            dax = re.sub(r"SUMX\s*\(\s*'?([a-zA-Z0-9_]+)'?\s*,\s*(?:[a-zA-Z0-9_]+\[)?'?\s*([a-zA-Z0-9_]+)'?\]?\s*\)", r"SUM('\1'[\2])", dax, flags=re.IGNORECASE)
-            if dax.endswith("}") and "{" not in dax:
-                dax = dax[:-1].strip()
-            result = (res["measure_name"].strip(), dax)
-            self.cache[cache_key] = result
-            return result
+
+            # The model was told to answer this when the construct has no
+            # faithful DAX equivalent — a Tableau table calculation depends on
+            # the visual's layout, and any DAX "equivalent" would return
+            # different numbers while looking correct. Fall through to the
+            # unresolved path so it is reported rather than silently wrong.
+            if dax.upper().replace(" ", "").strip("-;") != "NEEDS_MANUAL_REVIEW":
+                dax = re.sub(r"^[\s=\[]+|[\s\]]+$", "", dax)
+                dax = re.sub(r"COUNTX\s*\(\s*'?([a-zA-Z0-9_]+)'?\s*,\s*'?([a-zA-Z0-9_]+)'?\s*\)", r"COUNTA('\1'[\2])", dax, flags=re.IGNORECASE)
+                dax = re.sub(r"SUMX\s*\(\s*'?([a-zA-Z0-9_]+)'?\s*,\s*(?:[a-zA-Z0-9_]+\[)?'?\s*([a-zA-Z0-9_]+)'?\]?\s*\)", r"SUM('\1'[\2])", dax, flags=re.IGNORECASE)
+                if dax.endswith("}") and "{" not in dax:
+                    dax = dax[:-1].strip()
+                result = (res["measure_name"].strip(), dax)
+                self.cache[cache_key] = result
+                return result
+            print(f"  [MANUAL REVIEW] {self.dialect_label} construct has no faithful "
+                  f"DAX equivalent: {qlik_key}")
 
         # TIER 4: Untranslatable: surface it instead of inventing a formula.
         self.unresolved.append({"expression": qlik_key, "table": table_name})
@@ -276,8 +324,8 @@ class AIConverterBrain:
         short = re.sub(r"\s+", " ", short)[:40] or "Expression"
         name = f"[Needs Review] {short}"
         dax = (
-            f"-- TODO: translate this Qlik expression manually.\n"
-            f"-- Original Qlik: {qlik_key}\n"
+            f"-- TODO: translate this {self.dialect_label} expression manually.\n"
+            f"-- Original {self.dialect_label}: {qlik_key}\n"
             f"BLANK()"
         )
         return _finish((name, dax))
@@ -383,11 +431,22 @@ def _mb(num_bytes):
 def new_guid():
     return str(uuid.uuid4())
 
-def safe_name(name: str) -> str:
-    """Normalise a Qlik table name into a Tabular-safe identifier."""
+# Name given to a table the source left unnamed. It reaches the generated model,
+# so it is per-platform: calling a Tableau table "QlikTable" would be a visible
+# lie in the user's semantic model. Qlik keeps the name it has always had, which
+# is why "qlik" is the default everywhere this is consulted.
+DEFAULT_TABLE_NAMES = {"qlik": "QlikTable", "tableau": "TableauTable"}
+
+
+def default_table_name(platform: str = "qlik") -> str:
+    return DEFAULT_TABLE_NAMES.get((platform or "qlik").strip().lower(), "SourceTable")
+
+
+def safe_name(name: str, fallback: str = "QlikTable") -> str:
+    """Normalise a source table name into a Tabular-safe identifier."""
     cleaned = re.sub(r"[^A-Za-z0-9_]", "_", (name or "").strip()).strip("_")
     if not cleaned:
-        return "QlikTable"
+        return fallback
     if cleaned[0].isdigit():
         cleaned = f"T_{cleaned}"
     return cleaned
@@ -455,6 +514,11 @@ class UniversalModelGenerator:
         self.database = database
         self.mode = mode
 
+        # Which platform this metadata was read out of. Absent on extractions
+        # produced before the field existed, all of which were Qlik.
+        self.source_platform = (extraction_data.get("source_platform") or "qlik").strip().lower()
+        self.default_table = default_table_name(self.source_platform)
+
         # Rows read from the live Qlik engine, keyed by the engine's table name.
         # Empty for a .qvf handed over on its own: the file carries structure,
         # never data.
@@ -498,15 +562,28 @@ class UniversalModelGenerator:
         # The largest table is the sensible default for visuals whose field
         # references cannot be resolved.
         self.table_name = safe_name(
-            max(self.script_tables, key=lambda t: len(t.fields)).name
-        ) if self.script_tables else "QlikTable"
+            max(self.script_tables, key=lambda t: len(t.fields)).name,
+            self.default_table,
+        ) if self.script_tables else self.default_table
 
         self.table_status = {}
 
     def _discover_tables(self) -> list:
         """
-        Build the table list from the load script, falling back to the data
-        model when the script is unavailable or unparseable.
+        Build the table list, in descending order of how much the source told us.
+
+        1. A load script, parsed. Qlik states its whole schema there, so when one
+           is present it is authoritative.
+        2. Data-model tables that carry their own field lists. Sources with no
+           load script -- Tableau states its schema as datasources and relations
+           -- describe themselves this way.
+        3. A single table holding every reported field, when the source named no
+           tables at all.
+
+        Order matters: step 2 sits above the single-table fallback because
+        collapsing a multi-table source into one table would silently destroy
+        its schema, and below the script because a script is the richer
+        description of the same thing.
         """
         tables = [
             t for t in parse_load_script(self.data.get("load_script", ""))
@@ -515,17 +592,49 @@ class UniversalModelGenerator:
         if tables:
             return tables
 
-        # Fallback: one table holding whatever fields the data model reported.
-        fields = self.data.get("data_model", {}).get("fields", [])
-        dm_tables = self.data.get("data_model", {}).get("tables", [])
-        name = dm_tables[0].get("name", "QlikTable") if dm_tables else "QlikTable"
+        data_model = self.data.get("data_model", {}) or {}
+        dm_tables = data_model.get("tables", []) or []
+        fields = data_model.get("fields", []) or []
+
+        # Step 2. Only tables that name their own fields qualify -- a table entry
+        # that is just a name tells us nothing a single table would not.
+        structured = [t for t in dm_tables if isinstance(t, dict) and t.get("fields")]
+        if structured:
+            built = []
+            for index, t in enumerate(structured):
+                # Deduplicated case-insensitively: a repeated column becomes a
+                # duplicate field in the generated M record type, which the
+                # mashup engine rejects and which fails the entire model rather
+                # than the one table. Guarded here as well as in each extractor
+                # so no source can produce an unloadable model.
+                fields, seen = [], set()
+                for f in t["fields"]:
+                    name = (f.get("name", "") if isinstance(f, dict) else str(f)) or ""
+                    if not name or name.lower() in seen:
+                        continue
+                    seen.add(name.lower())
+                    fields.append(SourceField(
+                        name=name,
+                        expression=f.get("expression", "") if isinstance(f, dict) else "",
+                        is_derived=bool(f.get("is_derived")) if isinstance(f, dict) else False,
+                    ))
+                built.append(SourceTable(
+                    name=t.get("name") or "Table%d" % (index + 1),
+                    fields=fields,
+                    source=TableOrigin(kind=t.get("origin_kind", "unknown"),
+                                       raw=t.get("origin", "")),
+                ))
+            return built
+
+        # Step 3. One table holding whatever fields the data model reported.
+        name = dm_tables[0].get("name", self.default_table) if dm_tables else self.default_table
         if not fields:
             return []
         return [
-            QlikTable(
+            SourceTable(
                 name=name,
-                fields=[QlikField(name=f["name"]) for f in fields],
-                source=QlikSource(kind="unknown"),
+                fields=[SourceField(name=f["name"]) for f in fields],
+                source=TableOrigin(kind="unknown"),
             )
         ]
 
@@ -808,6 +917,9 @@ class UniversalModelGenerator:
                 ],
             },
         }
+        relationships = self._build_relationships(model_tables)
+        if relationships:
+            model["model"]["relationships"] = relationships
         return model
 
     def generate(self) -> dict:
@@ -857,10 +969,10 @@ class UniversalModelGenerator:
         for name, payload in sorted(self.embedded_data.items()):
             if str(name).lower() in claimed:
                 continue
-            synthetic = QlikTable(
+            synthetic = SourceTable(
                 name=name,
-                fields=[QlikField(name=c) for c in payload["columns"]],
-                source=QlikSource(kind="unknown"),
+                fields=[SourceField(name=c) for c in payload["columns"]],
+                source=TableOrigin(kind="unknown"),
             )
             expression = build_embedded_expression(
                 name, payload["columns"], payload["rows"],
@@ -903,7 +1015,7 @@ class UniversalModelGenerator:
                 ),
             }
 
-            model_tables.append({
+            entry = {
                 "name": safe,
                 "lineageTag": new_guid(),
                 "columns": columns,
@@ -921,7 +1033,16 @@ class UniversalModelGenerator:
                         "status": status,
                     }),
                 }],
-            })
+            }
+
+            # Why this table has no rows, as metadata rather than as a comment
+            # banner inside the query. Power BI shows a table description in the
+            # field list, so the explanation is more visible here than it was in
+            # the M -- and it can no longer perturb the mashup document.
+            if status == "schema-only":
+                entry["description"] = unavailable_description(table)
+
+            model_tables.append(entry)
 
         expressions = []
         if any(t.source.is_file for t in self.script_tables):
@@ -955,7 +1076,94 @@ class UniversalModelGenerator:
         }
         if expressions:
             model["model"]["expressions"] = expressions
+        relationships = self._build_relationships(model_tables)
+        if relationships:
+            model["model"]["relationships"] = relationships
         return model
+
+    def _build_relationships(self, model_tables) -> list:
+        """Turns the source's explicit joins into Tabular relationships.
+
+        Only sources that state their joins produce any. Qlik states none — it
+        associates on shared field names — so this returns empty there and the
+        existing cross-table reporting is unchanged.
+
+        A join is emitted only when both of its tables and both of its columns
+        exist in the model that was actually built. A relationship naming a
+        column that is not there loads as a broken model in Power BI, which is
+        a worse outcome than the join being reported as unmapped.
+        """
+        relationships = []
+        skipped = []
+
+        # safe table name -> the column names it really has, matched
+        # case-insensitively because the source's casing need not agree.
+        columns_by_table = {
+            entry["name"]: {c["name"].lower(): c["name"] for c in entry.get("columns", [])}
+            for entry in model_tables
+        }
+
+        # The source's own table names map to the sanitised names in the model.
+        safe_by_source = {}
+        for table in self.script_tables:
+            safe_by_source[table.name.lower()] = safe_name(table.name, self.default_table)
+
+        seen = set()
+        for join in (self.data.get("data_model", {}) or {}).get("relationships", []) or []:
+            left_table = safe_by_source.get(str(join.get("left_table", "")).lower())
+            right_table = safe_by_source.get(str(join.get("right_table", "")).lower())
+            left_field = str(join.get("left_field", ""))
+            right_field = str(join.get("right_field", ""))
+
+            problem = None
+            if not left_table or not right_table:
+                problem = "one of its tables is not in the model"
+            elif left_table == right_table:
+                problem = "both sides resolve to the same table"
+            elif str(join.get("operator", "=")) != "=":
+                # Tabular relationships are equality-only; a non-equi join has
+                # no representation at all.
+                problem = "Power BI relationships support only '=' joins"
+            else:
+                left_column = columns_by_table.get(left_table, {}).get(left_field.lower())
+                right_column = columns_by_table.get(right_table, {}).get(right_field.lower())
+                if not left_column or not right_column:
+                    problem = "a joined column is not in the model"
+
+            if problem:
+                skipped.append("%s.%s = %s.%s (%s)"
+                               % (join.get("left_table"), left_field,
+                                  join.get("right_table"), right_field, problem))
+                continue
+
+            key = (left_table, left_column.lower(), right_table, right_column.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+
+            relationships.append({
+                "name": new_guid(),
+                # Tableau's left table is the many side of a typical fact-to-
+                # dimension join. The cardinality is not stated in the workbook,
+                # so the Tabular default (many-to-one) is used and the direction
+                # is reported for the user to confirm.
+                "fromTable": left_table,
+                "fromColumn": left_column,
+                "toTable": right_table,
+                "toColumn": right_column,
+                "joinOnDateBehavior": "datePartOnly",
+            })
+
+        if skipped:
+            self.size_notes.append(
+                "%d join(s) the source declared could not be modelled as Power BI "
+                "relationships and need wiring by hand: %s"
+                % (len(skipped), "; ".join(skipped)))
+        if relationships:
+            print("  [OK] Modelled %d relationship(s) from the source's joins."
+                  % len(relationships))
+
+        return relationships
 
     def _build_measures(self, table, safe: str, column_names: list) -> list:
         """
@@ -1099,6 +1307,21 @@ class UniversalVisualGenerator:
             "map": "map",
             "text-image": "textbox",
             "combochart": "lineClusteredColumnComboChart",
+
+            # Tableau mark classes, lowercased by the extractor. They share this
+            # table because a mark class and a Qlik object type occupy the same
+            # slot: both name what the source drew, and neither collides with
+            # the other's vocabulary.
+            "bar": "clusteredColumnChart",
+            "line": "lineChart",
+            "area": "areaChart",
+            "square": "treemap",
+            "circle": "scatterChart",
+            "shape": "scatterChart",
+            "text": "tableEx",
+            "pie": "pieChart",
+            "polygon": "map",
+            "multipolygon": "map",
         }
 
         # Qlik objects that hold other objects rather than rendering data. The
@@ -1117,6 +1340,12 @@ class UniversalVisualGenerator:
                                  "Power BI has no distribution plot"),
             "boxplot": ("clusteredColumnChart", "Power BI has no box plot"),
             "bulletchart": ("clusteredBarChart", "Power BI has no bullet chart"),
+
+            # Tableau mark classes with no faithful equivalent.
+            "gantt": ("clusteredBarChart", "Power BI has no native Gantt mark"),
+            "automatic": ("clusteredColumnChart",
+                          "Tableau chose this mark automatically, so the workbook "
+                          "states no explicit chart type"),
         }
 
         # Populated as visuals are built, surfaced in the audit report.
@@ -1905,14 +2134,17 @@ b'</Types>'
             lines += [
                 "## Tables whose data could not be read",
                 "",
-                "The Qlik engine was asked for these and did not return them, so they",
-                "carry their schema and no rows. Nothing was substituted.",
+                "These carry their schema and no rows. Nothing was substituted.",
                 "",
                 "| Table | Reason |",
                 "| --- | --- |",
             ]
             for tname, reason in sorted(problems.items()):
-                lines.append("| %s | %s |" % (tname, str(reason).replace("|", "\\|")[:200]))
+                # A cell cannot span lines: a reason with newlines in it would
+                # end the table early and leave the rest as loose prose. The
+                # whole reason is kept, joined onto one line.
+                flat = " ".join(str(reason).split())
+                lines.append("| %s | %s |" % (tname, flat.replace("|", "\\|")[:300]))
             lines.append("")
 
         size_notes = list(dict.fromkeys(getattr(gen, "size_notes", None) or []))
@@ -1994,6 +2226,40 @@ b'</Types>'
             for table_name, d in all_dropped:
                 expr = d["expression"].replace("\n", " ").replace("|", "\\|")[:90]
                 lines.append(f"| {table_name} | {d['name']} | `{expr}` |")
+            lines.append("")
+
+        # Things the source stated but that could not be read. Recorded by the
+        # extractor and surfaced here rather than being quietly filled in with a
+        # default, which would leave the user believing the migration saw more
+        # than it did.
+        extraction_problems = self.data.get("extraction_problems") or []
+        if extraction_problems:
+            lines += [
+                "## Source content that could not be read",
+                "",
+                "The source workbook stated these, but they could not be interpreted.",
+                "Nothing was substituted for them: they are absent from the model",
+                "rather than present with a guessed value.",
+                "",
+            ]
+            lines += ["- %s" % str(problem).replace("|", "\\|") for problem in extraction_problems]
+            lines.append("")
+
+        # Joins the source declared that Power BI cannot express. Reported here
+        # because an unmodelled join means two tables that will not filter each
+        # other, which shows up as wrong totals rather than as an error.
+        join_notes = [n for n in getattr(self.model_gen, "size_notes", [])
+                      if "join(s) the source declared" in n]
+        if join_notes:
+            lines += [
+                "## Joins needing manual wiring",
+                "",
+                "The source declared these joins, but they have no Power BI",
+                "relationship equivalent. Until they are wired up by hand, the tables",
+                "involved will not filter one another.",
+                "",
+            ]
+            lines += ["- %s" % note.replace("|", "\\|") for note in join_notes]
             lines.append("")
 
         if unresolved:
@@ -2216,6 +2482,7 @@ def main():
     parser = argparse.ArgumentParser(description="AI-Powered General-Purpose QVF to Power BI PBIP Converter")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--qvf", help="Path to any Qlik Sense (.qvf) file")
+    group.add_argument("--twbx", help="Path to any Tableau workbook (.twbx or .twb)")
     group.add_argument("--input", "-i", help="Path to extracted extraction_result.json")
     
     parser.add_argument("--output", "-o", help="Output directory for Power BI Project")
@@ -2246,13 +2513,21 @@ def main():
     args = parser.parse_args()
 
     # 1. Initialize AI Brain
-    ai_brain = AIConverterBrain(provider=args.provider, model=args.model, api_key=args.api_key)
+    # The dialect follows the input flag: it is settled before the extraction
+    # runs, because the brain is built first.
+    ai_brain = AIConverterBrain(provider=args.provider, model=args.model, api_key=args.api_key,
+                               dialect="tableau" if args.twbx else "qlik")
 
     # 2. Load or Extract Data
     if args.qvf:
         print(f"Extracting metadata dynamically from '{args.qvf}'...")
         from qvf_extractor import QVFExtractor
         extractor = QVFExtractor(args.qvf)
+        extraction_data = extractor.extract()
+    elif args.twbx:
+        print(f"Extracting metadata dynamically from '{args.twbx}'...")
+        from tableau_extractor import TableauExtractor
+        extractor = TableauExtractor(args.twbx)
         extraction_data = extractor.extract()
     else:
         with open(args.input, "r", encoding="utf-8") as f:
@@ -2277,6 +2552,42 @@ def main():
     generator.generate()
 
 
+def _read_tableau_data(args, extraction_data):
+    """Read rows out of the workbook's own extract.
+
+    Unlike the Qlik path there is nothing to connect to: a .twbx bundles its
+    extract, so the rows are already local. Failure is never fatal — the
+    migration continues with structure only, and the reason is recorded for the
+    audit report.
+    """
+    tables = (extraction_data.get("data_model") or {}).get("tables") or []
+    table_names = [t.get("name") for t in tables if t.get("name")]
+
+    max_rows = args.max_rows
+    if args.stage_lakehouse and "--max-rows" not in sys.argv:
+        max_rows = None
+        print("\n  Staging to a Lakehouse, so no row cap is applied.")
+
+    print("\n  Reading data for %d table(s) from the workbook's extract..."
+          % len(table_names))
+    try:
+        from tableau_data_reader import read_workbook_tables
+        data, problems = read_workbook_tables(
+            args.twbx, table_names, max_rows=max_rows,
+            work_dir=os.path.dirname(os.path.abspath(args.twbx)),
+            note=lambda text: print("  " + text),
+        )
+    except Exception as err:            # noqa: BLE001 - reported, never fatal
+        print(f"  [WARN] Could not read the workbook's extract: {err}")
+        return {}, {"(all tables)": str(err)}
+
+    total = sum(len(d["rows"]) for d in data.values())
+    print(f"  [OK] Read {total:,} row(s) across {len(data)} table(s); "
+          f"{len(problems)} table(s) could not be read. "
+          f"The audit report states what was finally embedded.")
+    return data, problems
+
+
 def _read_live_data(args, extraction_data):
     """
     Pull each table's rows from the Qlik engine, when a tenant was supplied.
@@ -2289,6 +2600,11 @@ def _read_live_data(args, extraction_data):
     could not be read keeps the partition it would otherwise have had, with the
     reason recorded for the audit report.
     """
+    # A Tableau workbook carries its own rows: the .twbx already on disk holds
+    # the extract, so there is no second call to make and no credential needed.
+    if args.twbx:
+        return _read_tableau_data(args, extraction_data)
+
     if not (args.qlik_tenant and args.qlik_app_id):
         return {}, {}
 
@@ -2338,4 +2654,7 @@ def _read_live_data(args, extraction_data):
 
 
 if __name__ == "__main__":
-    main()
+    # The return value is the exit code. Without carrying it through, a run that
+    # bailed out would still exit 0 and be reported to the user as a successful
+    # migration that happens to have produced nothing.
+    sys.exit(main() or 0)

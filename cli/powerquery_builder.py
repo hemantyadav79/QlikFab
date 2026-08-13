@@ -263,7 +263,7 @@ def _build_delimited(table, resolver: TypeResolver) -> list:
     columns = source_columns(table)
     lines = [
         "let",
-        "    // Migrated from Qlik: %s" % (source.path or source.relative_path),
+        "    /* Migrated from Qlik: %s */" % comment_safe(source.path or source.relative_path, 200),
         "    Source = Csv.Document(",
         "        File.Contents(%s)," % _path_expression(source),
         '        [Delimiter = "%s", QuoteStyle = QuoteStyle.Csv%s]'
@@ -302,7 +302,7 @@ def _build_excel(table, resolver: TypeResolver) -> list:
     columns = source_columns(table)
     lines = [
         "let",
-        "    // Migrated from Qlik: %s" % (source.path or source.relative_path),
+        "    /* Migrated from Qlik: %s */" % comment_safe(source.path or source.relative_path, 200),
         "    Workbook = Excel.Workbook(File.Contents(%s), null, true),"
         % _path_expression(source),
     ]
@@ -338,7 +338,7 @@ def _build_resident(table, resolver: TypeResolver) -> list:
     columns = table.field_names
     return [
         "let",
-        "    // Qlik RESIDENT load from table: %s" % source.resident_table,
+        "    /* Qlik RESIDENT load from table: %s */" % comment_safe(source.resident_table, 200),
         "    Source = %s," % escape_m_identifier(source.resident_table),
         "    Selected = Table.SelectColumns(Source, {%s}, MissingField.UseNull)"
         % ", ".join('"%s"' % escape_m_string(c) for c in columns if not _is_derived(table, c)),
@@ -404,7 +404,7 @@ def _build_inline(table, resolver: TypeResolver) -> list:
 
     return [
         "let",
-        "    // Qlik INLINE data, migrated verbatim (%d rows)" % len(body),
+        "    /* Qlik INLINE data, migrated verbatim (%d rows) */" % len(body),
         "    Source = #table({%s}, {%s}),"
         % (
             ", ".join('"%s"' % escape_m_string(h) for h in header),
@@ -417,6 +417,55 @@ def _build_inline(table, resolver: TypeResolver) -> list:
     ]
 
 
+def comment_safe(value: str, limit: int = 500) -> str:
+    """
+    Flatten a value so it cannot escape the `//` comment it is written into.
+
+    An M line comment ends at the newline. Interpolating a multi-line value --
+    a native SQL SELECT, a Tableau custom-SQL relation, a wrapped error message
+    -- therefore ends the comment early and leaves the remaining lines to be
+    parsed as code. The mashup engine reports that as a bare "Token ',' expected"
+    pointing at a line the author never wrote, which is close to impossible to
+    diagnose from the message alone.
+
+    Length is capped as well: these values can be a whole query, and a comment
+    that runs for pages helps nobody reading the generated M.
+    """
+    flattened = " ".join(str(value).split())
+    if len(flattened) > limit:
+        flattened = flattened[:limit].rstrip() + " ... (truncated)"
+    return flattened or "(unknown)"
+
+
+def unavailable_description(table) -> str:
+    """The explanation for a schema-only table, as prose for its description.
+
+    This used to be a fourteen-line `//` comment banner inside the query
+    itself. It was moved out because a mashup document is assembled from every
+    partition's M, and anything that disturbs a line boundary turns a `//`
+    comment into a swallowed query -- a failure Fabric reports only as
+    "Token ',' expected", naming neither the table nor the line.
+
+    A table description carries the same information where the user is more
+    likely to read it (Power BI shows it in the field list), and cannot break
+    the parser no matter what it contains.
+    """
+    source = table.source
+    original = source.path or source.relative_path or source.raw or "(unknown)"
+    # Derived here rather than passed in, so the reason table stays private to
+    # this module and callers cannot drift out of step with it.
+    reason = _UNAVAILABLE_REASONS.get(source.kind, _UNAVAILABLE_REASONS["unknown"])
+    return (
+        "SOURCE NOT AUTOMATICALLY MIGRATABLE. %s Original source: %s. "
+        "The schema is the real schema read from the source app; no sample rows "
+        "are generated, because fabricated data would render charts that look "
+        "correct but mean nothing. To finish this table, replace the Source step "
+        "with a connector for the upstream system, or export the source to CSV "
+        "and point the %s parameter at it."
+        % (comment_safe(reason, 300), comment_safe(original, 200), ROOT_PARAMETER)
+    )
+
+
 def _build_unavailable(table, resolver: TypeResolver, reason: str) -> list:
     """
     Emit the correct schema with zero rows.
@@ -425,24 +474,12 @@ def _build_unavailable(table, resolver: TypeResolver, reason: str) -> list:
     QVD files, which are a closed Qlik format. The table loads, the model is
     structurally complete, and the report opens; the visuals are simply empty
     until the user re-points the query. That is the honest outcome.
+
+    The query itself is deliberately minimal and carries no comments: see
+    `unavailable_description` for where the explanation went, and why.
     """
-    source = table.source
-    original = source.path or source.relative_path or source.raw or "(unknown)"
     return [
         "let",
-        "    // ================================================================",
-        "    // SOURCE NOT AUTOMATICALLY MIGRATABLE",
-        "    // %s" % reason,
-        "    // Original Qlik source: %s" % original,
-        "    //",
-        "    // The schema below is the real schema read from the Qlik app.",
-        "    // No sample rows are generated on purpose: fabricated data would",
-        "    // render charts that look correct but mean nothing.",
-        "    //",
-        "    // To finish this table, replace the Source step with a connector",
-        "    // for the upstream system, or export the source to CSV and point",
-        "    // the %s parameter at it." % ROOT_PARAMETER,
-        "    // ================================================================",
         "    Schema = #table(",
         "        %s," % _schema_type_literal(table.field_names, resolver),
         "        {}",
@@ -573,12 +610,16 @@ def build_embedded_expression(table_name: str, columns: list, rows: list,
         for name in columns
     ) + "]"
 
+    # Block comments, not `//`. These sit ahead of `let`, so if anything ever
+    # collapses a line boundary a line comment would swallow the entire query
+    # rather than one line of it.
     lines = [
-        "// %d row(s) read from the Qlik engine for %s." % (len(rows), table_name),
+        "/* %d row(s) read from the Qlik engine for %s. */"
+        % (len(rows), comment_safe(table_name, 120)),
     ]
     if truncated:
         lines.append(
-            "// Capped by the embedded-size budget; this is not the whole table.")
+            "/* Capped by the embedded-size budget; this is not the whole table. */")
     lines += ["let", "    Source = #table("]
     lines.append("        %s," % schema)
     if not rows:

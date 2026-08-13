@@ -539,6 +539,11 @@ class QVFExtractor:
         print("[7/7] Building results...\n")
 
         results = {
+            # Which platform produced this extraction. The engine reads it to
+            # pick dialect-specific behaviour; a Qlik extraction is the default
+            # everywhere it is consulted, so extractions written before this
+            # field existed keep working untouched.
+            'source_platform': 'qlik',
             'file': {
                 'name': self.qvf_path.name,
                 'path': str(self.qvf_path.absolute()),
@@ -552,6 +557,11 @@ class QVFExtractor:
                 'tables': self.tables,
                 'fields': self.fields,
                 'meta': self.data_model,
+                # Qlik associates tables implicitly on shared field names and
+                # states no joins, so this is always empty here. It exists so
+                # the structure is the same shape whichever platform filled it,
+                # and is populated by sources that do state their joins.
+                'relationships': [],
             },
             'sheets': self.sheets,
             'variables': self.variables,

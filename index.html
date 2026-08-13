@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Qlik → Fabric | Autonomous Migration Platform</title>
+    <title>Qlik / Tableau → Fabric | Autonomous Migration Platform</title>
     <meta name="color-scheme" content="light dark">
 
     <!--
@@ -40,7 +40,7 @@
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="logo-icon"><i class="fa-solid fa-bolt-lightning"></i></div>
-                <div class="logo-text">Qlik <span>→</span> Fabric</div>
+                <div class="logo-text">Qlik / Tableau <span>→</span> Fabric</div>
             </div>
             <div class="nav-section-title">Navigate</div>
             <nav class="nav-menu">
@@ -95,7 +95,7 @@
                         <i class="fa-solid fa-bars"></i>
                     </button>
                     <div class="header-titles">
-                        <h1>Qlik <span>→</span> Fabric</h1>
+                        <h1>Qlik / Tableau <span>→</span> Fabric</h1>
                         <p>Autonomous migration platform</p>
                     </div>
                 </div>
@@ -126,23 +126,80 @@
                 <div class="migration-grid" id="migration-grid">
                     <!-- SOURCE: LIVE QLIK CLOUD REST CONNECTION -->
                     <div class="migration-card secondary-card" id="mode-pane-qlik">
-                        <h2><i class="fa-solid fa-cloud"></i> Connect to Qlik Cloud</h2>
-
-                        <div class="form-group">
-                            <label>Tenant URL</label>
-                            <input type="text" id="qlik-tenant-url" class="custom-input" placeholder="https://your-tenant.region.qlikcloud.com">
+                        <!--
+                          The source platform picker. Only the credential fields below
+                          swap: the status line, the content picker and the run bar are
+                          shared, because "sign in, list what is there, choose some of
+                          it" is the same job whichever platform answers.
+                        -->
+                        <div class="source-picker">
+                            <h2 id="source-card-title"><i class="fa-solid fa-cloud" id="source-card-icon"></i> Connect to Qlik Cloud</h2>
+                            <div class="form-group source-select-group">
+                                <label for="source-platform">Source platform</label>
+                                <select id="source-platform" class="custom-input">
+                                    <option value="qlik" selected>Qlik Cloud</option>
+                                    <option value="tableau">Tableau Server / Cloud</option>
+                                </select>
+                            </div>
                         </div>
 
-                        <div class="form-group">
-                            <label>API Key (Bearer Token)</label>
-                            <input type="password" id="qlik-api-key" class="custom-input" placeholder="eyJhbGciOiJIUzI1...">
+                        <!-- SOURCE FIELDS: QLIK -->
+                        <div id="source-fields-qlik">
+                            <div class="form-group">
+                                <label>Tenant URL</label>
+                                <input type="text" id="qlik-tenant-url" class="custom-input" placeholder="https://your-tenant.region.qlikcloud.com">
+                            </div>
+
+                            <div class="form-group">
+                                <label>API Key (Bearer Token)</label>
+                                <input type="password" id="qlik-api-key" class="custom-input" placeholder="eyJhbGciOiJIUzI1...">
+                            </div>
+
+                            <p class="form-hint">
+                                Create the key in the Qlik Management Console under <b>API keys</b>. Paste the
+                                token only — no <code>Bearer</code> prefix. For the browser to reach your tenant,
+                                add this app's origin under <b>Management Console &rarr; Content Security Policy</b>.
+                            </p>
                         </div>
 
-                        <p class="form-hint">
-                            Create the key in the Qlik Management Console under <b>API keys</b>. Paste the
-                            token only — no <code>Bearer</code> prefix. For the browser to reach your tenant,
-                            add this app's origin under <b>Management Console &rarr; Content Security Policy</b>.
-                        </p>
+                        <!-- SOURCE FIELDS: TABLEAU -->
+                        <div id="source-fields-tableau" class="hidden">
+                            <div class="form-group">
+                                <label>Server URL</label>
+                                <input type="text" id="tableau-server-url" class="custom-input" placeholder="https://10ax.online.tableau.com" autocomplete="off">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Site (content URL)</label>
+                                <input type="text" id="tableau-site" class="custom-input" placeholder="Leave empty for the Default site" autocomplete="off">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Personal Access Token name</label>
+                                <input type="text" id="tableau-pat-name" class="custom-input" placeholder="migration-token" autocomplete="off">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Personal Access Token secret</label>
+                                <input type="password" id="tableau-pat-secret" class="custom-input" placeholder="The secret shown when the token was created" autocomplete="off">
+                            </div>
+
+                            <p class="form-hint">
+                                Create the token under <b>My Account Settings &rarr; Personal Access Tokens</b>.
+                                The <b>site content URL</b> is the segment in the browser address bar after
+                                <code>/site/</code> — the Default site has none, so leave it empty. A token
+                                lapses after 15 consecutive days unused. Nothing is stored: the values are
+                                used for this session only, and are sent in the request body rather than the
+                                URL so they stay out of logs and history.
+                            </p>
+
+                            <p class="form-hint">
+                                <b>Tableau Cloud</b> works as-is. A <b>self-hosted Tableau Server</b> must be
+                                named by the operator in the <code>TABLEAU_ALLOWED_HOSTS</code> environment
+                                variable before this server will connect to it — its hostname could be
+                                anything, so it cannot be allowed automatically.
+                            </p>
+                        </div>
 
                         <button id="btn-test-connection" class="btn-secondary-block">
                             Test Connection
@@ -152,6 +209,7 @@
                         <div class="conn-status hidden" id="qlik-status" role="status" aria-live="polite"></div>
 
                         <div id="qlik-apps-container" class="form-group" style="display: none;">
+                            <!-- Wording is set per source platform by script.js. -->
                             <label id="qlik-app-label">Select apps to migrate</label>
                             <!--
                               A collapsed dropdown rather than an inline list: a tenant can
