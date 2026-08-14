@@ -786,6 +786,19 @@ class UniversalModelGenerator:
         if self.staged_tables:
             return self.staged_tables
 
+        # Staging exists to get rows out of the model and into a Lakehouse. With
+        # no rows there is nothing to move, and going ahead would create a
+        # Lakehouse holding empty tables and bind the model to it as Direct
+        # Lake -- which needs a Storage-audience token the caller may not have,
+        # turning a publish that would have succeeded into one that fails, in
+        # exchange for an empty Lakehouse. The tables keep their import
+        # partitions instead, and the audit report already states why they carry
+        # no rows.
+        if not any(rows for _safe, _columns, rows in staged):
+            print("  [SKIP] No rows were read, so nothing is staged to a Lakehouse; "
+                  "the tables keep their schema-only partitions.")
+            return []
+
         os.makedirs(self.stage_dir, exist_ok=True)
         entries = []
         for safe, columns, rows in staged:

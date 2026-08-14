@@ -396,16 +396,73 @@ class TableauExtractor:
     # Worksheets and dashboards
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _shelf_tokens(text):
+        """Every column-instance token in a shelf or encoding reference.
+
+        A shelf reads `[federated.abc].[sum:Sales:qk]`, but the datasource half
+        is optional -- plenty of workbooks write the instance on its own -- and
+        a single shelf can carry several. Instances are picked out by their
+        `aggregation:field:type` shape rather than by position, so both forms
+        are read and the datasource token is never mistaken for a field.
+        """
+        return [token for token in re.findall(r"\[([^\[\]]+)\]", text or "")
+                if ":" in token]
+
+    def _worksheet_dependencies(self, view):
+        """What the worksheet says it uses, from <datasource-dependencies>.
+
+        This is the authoritative list: Tableau records every column a
+        worksheet touches here, with its role, whichever shelf or Marks card
+        slot it happens to sit in. Shelves alone miss anything placed only on
+        Marks, which for a pie, treemap, map or text table is all of it.
+        """
+        dependencies = {}
+        for block in view.findall("datasource-dependencies"):
+            columns = {}
+            for column in block.findall("column"):
+                columns[_strip_brackets(column.get("name", ""))] = {
+                    "role": (column.get("role") or "").lower(),
+                    "datatype": (column.get("datatype") or "").lower(),
+                    "caption": column.get("caption") or "",
+                }
+            for instance in block.findall("column-instance"):
+                name = _strip_brackets(instance.get("name", ""))
+                column = _strip_brackets(instance.get("column", ""))
+                info = columns.get(column, {})
+                if not name:
+                    continue
+                dependencies[name] = {
+                    "column": column,
+                    "role": info.get("role", ""),
+                    "derivation": (instance.get("derivation") or "").lower(),
+                    "caption": info.get("caption") or column,
+                }
+            # A column with no instance is still a dependency the sheet uses.
+            for column_name, info in columns.items():
+                dependencies.setdefault(column_name, {
+                    "column": column_name,
+                    "role": info.get("role", ""),
+                    "derivation": "",
+                    "caption": info.get("caption") or column_name,
+                })
+        return dependencies
+
     def _parse_shelf_reference(self, reference):
         """Reads one shelf entry into (field_name, aggregation, is_measure).
 
-        A reference looks like `[datasource].[sum:Sales:qk]`. The middle segment
-        carries the aggregation, the field, and a type suffix.
+        A reference looks like `[datasource].[sum:Sales:qk]`, or just
+        `[sum:Sales:qk]`. The instance segment carries the aggregation, the
+        field, and a type suffix.
         """
-        parts = re.findall(r"\[([^\]]+)\]", reference or "")
-        if not parts:
-            return None
-        token = parts[-1]
+        tokens = self._shelf_tokens(reference)
+        if tokens:
+            token = tokens[-1]
+        else:
+            parts = re.findall(r"\[([^\[\]]+)\]", reference or "")
+            if not parts:
+                return None
+            token = parts[-1]
 
         segments = token.split(":")
         if len(segments) >= 3:
@@ -444,31 +501,44 @@ class TableauExtractor:
                 break
 
         dimensions, measures = [], []
+
+        def add_measure(name, aggregation, encoding=""):
+            if any(item["name"] == name for item in measures):
+                return
+            entry = {
+                "name": name,
+                # The engine's measure builder reads `expression`; the
+                # aggregation Tableau stated is what it means.
+                "expression": "%s([%s])" % ((aggregation or "sum").upper(), name),
+                "label": name,
+                "aggregation": aggregation or "sum",
+            }
+            if encoding:
+                entry["encoding"] = encoding
+            measures.append(entry)
+
+        def add_dimension(name, encoding=""):
+            if any(item["name"] == name for item in dimensions):
+                return
+            entry = {"name": name, "field": name, "label": name}
+            if encoding:
+                entry["encoding"] = encoding
+            dimensions.append(entry)
+
         for shelf in ("rows", "cols"):
             text = table.findtext(shelf, "") or ""
-            for reference in re.findall(r"\[[^\]]+\]\.\[[^\]]+\]", text):
-                parsed = self._parse_shelf_reference(reference)
+            for token in self._shelf_tokens(text):
+                parsed = self._parse_shelf_reference("[%s]" % token)
                 if not parsed:
                     continue
                 if parsed["is_measure"]:
-                    measures.append({
-                        "name": parsed["name"],
-                        # The engine's measure builder reads `expression`; the
-                        # aggregation Tableau stated is what it means.
-                        "expression": "%s([%s])" % (parsed["aggregation"].upper(), parsed["name"]),
-                        "label": parsed["name"],
-                        "aggregation": parsed["aggregation"],
-                    })
+                    add_measure(parsed["name"], parsed["aggregation"])
                 else:
-                    dimensions.append({
-                        "name": parsed["name"],
-                        "field": parsed["name"],
-                        "label": parsed["name"],
-                    })
+                    add_dimension(parsed["name"])
 
-        # Encodings (colour, size, label, detail) carry further fields. They are
-        # read as dimensions so the visual can bind them, which is what Tableau
-        # does with them on every mark type except text.
+        # Encodings (colour, size, label, detail, text) carry further fields.
+        # For a pie, treemap, map or text table these are the *only* fields --
+        # such a worksheet has empty rows and cols shelves.
         for encoding in table.findall(".//encodings/*"):
             column = encoding.get("column")
             if not column:
@@ -476,22 +546,45 @@ class TableauExtractor:
             parsed = self._parse_shelf_reference(column)
             if not parsed:
                 continue
-            target = measures if parsed["is_measure"] else dimensions
-            if not any(item["name"] == parsed["name"] for item in target):
-                if parsed["is_measure"]:
-                    target.append({
-                        "name": parsed["name"],
-                        "expression": "%s([%s])" % (parsed["aggregation"].upper(), parsed["name"]),
-                        "label": parsed["name"],
-                        "aggregation": parsed["aggregation"],
-                    })
+            if parsed["is_measure"]:
+                add_measure(parsed["name"], parsed["aggregation"], encoding.tag)
+            else:
+                add_dimension(parsed["name"], encoding.tag)
+
+        # Fallback: what the worksheet declares it depends on. Reached when the
+        # shelves and Marks card between them named nothing this parser
+        # recognised -- a worksheet built entirely from column-instances the
+        # shelf syntax does not spell out, which would otherwise reach the
+        # engine with no fields at all and be dropped as an empty visual.
+        view = table.find("view")
+        if not dimensions and not measures and view is not None:
+            for instance, info in self._worksheet_dependencies(view).items():
+                display = self._caption_by_name.get(info["column"]) or info["caption"] or info["column"]
+                if not display:
+                    continue
+                derivation = info["derivation"]
+                if info["role"] == "measure" or derivation in _AGGREGATIONS:
+                    add_measure(display, derivation if derivation in _AGGREGATIONS else "sum")
+                elif info["role"] == "dimension":
+                    add_dimension(display)
                 else:
-                    target.append({
-                        "name": parsed["name"],
-                        "field": parsed["name"],
-                        "label": parsed["name"],
-                        "encoding": encoding.tag,
-                    })
+                    # Role unstated: read it off the instance's own prefix
+                    # rather than assuming one.
+                    parsed = self._parse_shelf_reference("[%s]" % instance)
+                    if not parsed:
+                        continue
+                    if parsed["is_measure"]:
+                        add_measure(parsed["name"], parsed["aggregation"])
+                    else:
+                        add_dimension(parsed["name"])
+
+        if not dimensions and not measures:
+            # Recorded rather than passed on silently: the engine drops a visual
+            # with nothing to project, and without this the page would just come
+            # out empty with no explanation.
+            self.problems.append(
+                "Worksheet %r names no fields this parser could read, so it "
+                "produces no visual." % name)
 
         chart = {
             "id": name,

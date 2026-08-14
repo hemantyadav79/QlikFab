@@ -436,14 +436,24 @@ class MigrationRun:
         tenant, app_id, authorization = getattr(self, "_qlik_source", (None, None, None))
         if tenant and app_id:
             command += ["--qlik-tenant", tenant, "--qlik-app-id", app_id]
-            # Stage to a Lakehouse rather than embedding rows in the model.
-            # Embedding is bounded by the Fabric request body -- a 632,000-row
-            # fact table is ~103 MB of M and is refused -- so a tenant run,
-            # which is the only kind that has real rows, stages by default.
-            # QLIKFAB_EMBED_ROWS=1 forces the old behaviour for a small app,
-            # where embedding avoids needing a Storage-audience token at all.
-            if os.environ.get("QLIKFAB_EMBED_ROWS", "").strip().lower() not in ("1", "true", "yes"):
-                command.append("--stage-lakehouse")
+
+        # Stage to a Lakehouse rather than embedding rows in the model.
+        # Embedding is bounded by the Fabric request body -- a 632,000-row fact
+        # table is ~103 MB of M and is refused -- so any run that can produce
+        # real rows stages by default. QLIKFAB_EMBED_ROWS=1 forces the old
+        # behaviour for a small app, where embedding avoids needing a
+        # Storage-audience token at all.
+        #
+        # Asked for by source platform, not by whether a Qlik tenant was given:
+        # a Tableau workbook carries its rows in its own extract, so gating this
+        # on `_qlik_source` meant a Tableau migration could never stage and so
+        # never got a Lakehouse. A run that turns out to have no rows writes no
+        # manifest, and the publisher then skips Lakehouse creation on its own --
+        # so this is safe to ask for even when nothing comes of it.
+        can_have_rows = bool(tenant and app_id) or self.source_platform == "tableau"
+        if can_have_rows and os.environ.get(
+                "QLIKFAB_EMBED_ROWS", "").strip().lower() not in ("1", "true", "yes"):
+            command.append("--stage-lakehouse")
 
         self.note("[runner] %s" % " ".join(os.path.basename(c) if c.endswith(".py") else c for c in command[1:]))
 
