@@ -1045,7 +1045,18 @@ class UniversalModelGenerator:
             model_tables.append(entry)
 
         expressions = []
-        if any(t.source.is_file for t in self.script_tables):
+        # Emitted for file-backed tables, which resolve their paths against it,
+        # and for schema-only tables, whose description tells the user to point
+        # this parameter at their exported data. Without the second case that
+        # instruction named a parameter the model did not contain -- which is
+        # exactly the shape a Tableau migration produces, since every one of its
+        # tables is schema-only and none is file-backed.
+        needs_root = (
+            any(t.source.is_file for t in self.script_tables)
+            or any(status == "schema-only" for status in
+                   (info.get("status") for info in self.table_status.values()))
+        )
+        if needs_root:
             expressions.append({
                 "name": ROOT_PARAMETER,
                 "kind": "m",

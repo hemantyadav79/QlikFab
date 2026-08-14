@@ -51,6 +51,17 @@ def bad_m_literals(expr):
     if '#""' in expr:
         problems.append('empty quoted identifier #"" in M expression')
 
+    # The `type` keyword inside a row type's field specification. Valid one line
+    # away in a Table.TransformColumnTypes list, and rejected here: the field's
+    # type is parsed as a primary expression, so `= type text` fails and the
+    # field list reads as unterminated. Fabric reports it only as
+    # "Token ',' expected", naming neither the table nor the column.
+    for literal in re.findall(r'type table \[(.*?)\]', expr, re.DOTALL):
+        for keyword_use in re.findall(r'=\s*type\s+([A-Za-z]+)', literal):
+            problems.append(
+                f'row type uses "= type {keyword_use}"; a field specification takes '
+                f'a bare primitive ("{keyword_use}") or a type value (Int64.Type)')
+
     # Duplicate fields in a record type. `type table [#"X" = ..., #"X" = ...]`
     # is rejected outright, and the message names neither the table nor the
     # column -- it surfaces as the same bare "Token ',' expected".
@@ -179,7 +190,13 @@ def check(project_dir):
 
             schema = re.search(r'#table\(\s*type table \[(.*?)\]', expr, re.S)
             if schema:
-                emitted = set(re.findall(r'(?:#"([^"]+)"|\b([A-Za-z_][A-Za-z0-9_]*))\s*=\s*(?:type|Int64)', schema.group(1)))
+                # The field type may be a bare primitive (`text`), a type value
+                # (`Int64.Type`), or the `type text` keyword form this file
+                # rejects elsewhere -- so the column name is matched on the `=`
+                # and any type token that follows, not on a fixed set of them.
+                emitted = set(re.findall(
+                    r'(?:#"([^"]+)"|\b([A-Za-z_][A-Za-z0-9_]*))\s*=\s*[A-Za-z]',
+                    schema.group(1)))
                 emitted = {a or b for a, b in emitted}
                 missing = defined[t['name']] - emitted
                 if missing:

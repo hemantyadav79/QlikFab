@@ -25,13 +25,34 @@ TYPE_DOUBLE = "double"
 TYPE_DATETIME = "dateTime"
 TYPE_BOOLEAN = "boolean"
 
-# Tabular type -> Power Query type literal.
+# Tabular type -> Power Query type literal, in *expression* position: the
+# {"Column", <type>} pairs handed to Table.TransformColumnTypes. The `type`
+# keyword is required there.
 _M_TYPES = {
     TYPE_STRING: "type text",
     TYPE_INT64: "Int64.Type",
     TYPE_DOUBLE: "type number",
     TYPE_DATETIME: "type datetime",
     TYPE_BOOLEAN: "type logical",
+}
+
+# The same types in *field-specification* position -- the `[Name = <type>]`
+# entries of a `type table [...]` row type.
+#
+# These are NOT interchangeable with the above. A field specification's type is
+# parsed as a primary expression, so a bare primitive name (`text`) or a type
+# value (`Int64.Type`) is accepted while the `type text` keyword form is not.
+# Emitting `type text` here produced a document the mashup engine rejected with
+# "Token ',' expected" -- it had failed to parse the field's type and so read
+# the field list as unterminated. The message named neither the table nor the
+# column, and the same literal is correct one line away in a
+# Table.TransformColumnTypes call, which is what made this expensive to find.
+_M_FIELD_TYPES = {
+    TYPE_STRING: "text",
+    TYPE_INT64: "Int64.Type",
+    TYPE_DOUBLE: "number",
+    TYPE_DATETIME: "datetime",
+    TYPE_BOOLEAN: "logical",
 }
 
 # Qlik system field tags that carry type information.
@@ -203,7 +224,7 @@ def _type_transform_list(columns: list, resolver: TypeResolver) -> str:
 def _schema_type_literal(columns: list, resolver: TypeResolver) -> str:
     parts = []
     for name in columns:
-        m_type = _M_TYPES.get(resolver.resolve(name), "type text")
+        m_type = _M_FIELD_TYPES.get(resolver.resolve(name), "text")
         parts.append("%s = %s" % (escape_m_identifier(name), m_type))
     return "type table [" + ", ".join(parts) + "]"
 
@@ -606,7 +627,7 @@ def build_embedded_expression(table_name: str, columns: list, rows: list,
     """
     types = embedded_column_types(columns, rows, resolver)
     schema = "type table [" + ", ".join(
-        "%s = %s" % (escape_m_identifier(name), _M_TYPES.get(types[name], "type text"))
+        "%s = %s" % (escape_m_identifier(name), _M_FIELD_TYPES.get(types[name], "text"))
         for name in columns
     ) + "]"
 
