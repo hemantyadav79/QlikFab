@@ -786,19 +786,6 @@ class UniversalModelGenerator:
         if self.staged_tables:
             return self.staged_tables
 
-        # Staging exists to get rows out of the model and into a Lakehouse. With
-        # no rows there is nothing to move, and going ahead would create a
-        # Lakehouse holding empty tables and bind the model to it as Direct
-        # Lake -- which needs a Storage-audience token the caller may not have,
-        # turning a publish that would have succeeded into one that fails, in
-        # exchange for an empty Lakehouse. The tables keep their import
-        # partitions instead, and the audit report already states why they carry
-        # no rows.
-        if not any(rows for _safe, _columns, rows in staged):
-            print("  [SKIP] No rows were read, so nothing is staged to a Lakehouse; "
-                  "the tables keep their schema-only partitions.")
-            return []
-
         os.makedirs(self.stage_dir, exist_ok=True)
         entries = []
         for safe, columns, rows in staged:
@@ -827,6 +814,13 @@ class UniversalModelGenerator:
         with open(os.path.join(self.stage_dir, "manifest.json"), "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2)
         return entries
+
+    def _has_rows_to_stage(self) -> bool:
+        """True when at least one table actually has rows to put in a Lakehouse."""
+        return any(
+            (payload or {}).get("rows")
+            for payload in (self.embedded_data or {}).values()
+        )
 
     def _generate_direct_lake(self) -> dict:
         """
@@ -944,8 +938,24 @@ class UniversalModelGenerator:
         # here is reset rather than appended to a previous pass.
         self.engine_only_tables = []
 
-        if self.stage_dir:
+        # Direct Lake only when there are rows to put in the Lakehouse. The
+        # choice belongs here rather than inside _write_stage: that function
+        # deliberately stages empty Delta tables so the model stays uniform, and
+        # having it bail out instead left a model that declared Direct Lake with
+        # nothing staged behind it -- every table still pointing at
+        # {{QLIKFAB_LAKEHOUSE_ID}}, which the publisher rightly refuses.
+        #
+        # With no rows anywhere, a Lakehouse would hold only empty tables and
+        # binding to it needs a Storage-audience token the caller may not have.
+        # The import path produces the same schema, publishes with the token
+        # already in hand, and states per table why it carries no rows.
+        if self.stage_dir and self._has_rows_to_stage():
             return self._generate_direct_lake()
+
+        if self.stage_dir:
+            print("  [INFO] No rows were read, so the model is built with import "
+                  "partitions rather than Direct Lake; there is nothing to stage "
+                  "to a Lakehouse.")
 
         self._fit_embedded_data()
 

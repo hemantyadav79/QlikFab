@@ -225,6 +225,19 @@ def read_workbook_tables(twbx_path, table_names=None, max_rows=DEFAULT_MAX_ROWS,
 
     # Match the extract's tables to the model's, case-insensitively.
     by_lower = {name.lower(): name for name in found}
+
+    # A single-table workbook whose extract holds a single table is that table,
+    # whatever the two happen to be called. Tableau names an extract's table
+    # after the extract ("Extract"), not after the source relation, so a
+    # one-to-one workbook otherwise matched nothing and migrated with no rows at
+    # all. This is identity, not guesswork: with one table on each side there is
+    # no other pairing to make. Anything less clear-cut is still reported.
+    if len(found) == 1 and len(wanted) == 1 and wanted[0].lower() not in by_lower:
+        only_extract = next(iter(found))
+        note("[extract] The extract's only table is %r and the model's only table "
+             "is %r; reading one as the other." % (only_extract, wanted[0]))
+        return {wanted[0]: found[only_extract]}, {}
+
     for name in (wanted or list(found)):
         actual = by_lower.get(name.lower())
         if actual:
