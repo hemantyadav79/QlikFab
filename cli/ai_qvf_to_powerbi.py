@@ -2517,6 +2517,11 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--qvf", help="Path to any Qlik Sense (.qvf) file")
     group.add_argument("--twbx", help="Path to any Tableau workbook (.twbx or .twb)")
+    parser.add_argument("--extra-extract", action="append", default=[],
+                        metavar="PATH",
+                        help="Additional archive (.tdsx) whose extract holds this "
+                             "workbook's rows. Repeatable. Used for workbooks bound "
+                             "to a datasource published separately on the server.")
     group.add_argument("--input", "-i", help="Path to extracted extraction_result.json")
     
     parser.add_argument("--output", "-o", help="Output directory for Power BI Project")
@@ -2606,10 +2611,14 @@ def _read_tableau_data(args, extraction_data):
           % len(table_names))
     try:
         from tableau_data_reader import read_workbook_tables
+        extra = [p for p in (args.extra_extract or []) if os.path.exists(p)]
+        if extra:
+            print("  Also reading %d published datasource archive(s)." % len(extra))
         data, problems = read_workbook_tables(
             args.twbx, table_names, max_rows=max_rows,
             work_dir=os.path.dirname(os.path.abspath(args.twbx)),
             note=lambda text: print("  " + text),
+            extra_archives=extra,
         )
     except Exception as err:            # noqa: BLE001 - reported, never fatal
         print(f"  [WARN] Could not read the workbook's extract: {err}")
@@ -2619,6 +2628,23 @@ def _read_tableau_data(args, extraction_data):
     print(f"  [OK] Read {total:,} row(s) across {len(data)} table(s); "
           f"{len(problems)} table(s) could not be read. "
           f"The audit report states what was finally embedded.")
+
+    # A migration that reads nothing produces a model with the right schema and
+    # no data, no Lakehouse and empty visuals. That is a legitimate outcome for
+    # a live-connection workbook and a broken install alike, and the two look
+    # identical downstream -- so the reason is stated here, in the run log,
+    # rather than only in the audit report nobody opens until later.
+    if not total:
+        print("  " + "-" * 66)
+        print("  [WARN] No rows were read, so every table migrates with its real")
+        print("         schema and no data. Reason(s):")
+        for reason in dict.fromkeys(str(r).strip() for r in problems.values()):
+            first = " ".join(reason.split())
+            print("           - %s" % (first[:400] + (" ..." if len(first) > 400 else "")))
+        if not problems:
+            print("           - The workbook named no tables to read.")
+        print("  " + "-" * 66)
+
     return data, problems
 
 

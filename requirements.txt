@@ -27,3 +27,12 @@ pyarrow>=14
 # only, and the audit report says so per table rather than leaving the empty
 # result unexplained. Qlik migrations never need it.
 tableauhyperapi>=0.0.14000 ; python_version >= "3.8"
+
+# Reader for Excel files packaged inside a .twbx. A workbook connected to a
+# local file and saved WITHOUT an extract bundles the source file itself rather
+# than a .hyper, so this is what carries the rows in that case. CSV and TSV need
+# nothing extra; only .xlsx/.xls do.
+#
+# OPTIONAL for the same reason as above: without it such a workbook still
+# migrates, with its real schema and no rows, and says so per table.
+openpyxl>=3.1

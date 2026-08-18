@@ -385,7 +385,210 @@ class MigrationRun:
                 self.note("[export] Could not rename to %s (%s); continuing." % (actual, err))
 
         self.note("[export] Wrote %.2f MB to %s" % (size / 1048576.0, self.filename))
+        self._report_extract_inventory()
+
+        # A workbook bound to a published datasource keeps its rows in that
+        # item, so it has to be fetched too or the migration carries schema
+        # only. Done here, while the credential is still in hand.
+        self._extra_data_files = self.fetch_published_datasources(
+            server_url, pat_name, pat_secret, site)
+
         self._run()
+
+    def _referenced_published_datasources(self):
+        """Names of server-published datasources this workbook reads from.
+
+        Read straight from the workbook XML rather than guessed: a datasource
+        bound to a published item carries a <repository-location>, and its
+        connection class is 'sqlproxy'.
+        """
+        names = []
+        try:
+            import zipfile as _zipfile
+            import xml.etree.ElementTree as _ET
+            if _zipfile.is_zipfile(self.input_path):
+                with _zipfile.ZipFile(self.input_path) as archive:
+                    candidates = sorted(
+                        (n for n in archive.namelist() if n.lower().endswith(".twb")),
+                        key=lambda n: (n.count("/"), len(n)))
+                    if not candidates:
+                        return []
+                    raw = archive.read(candidates[0])
+            else:
+                with open(self.input_path, "rb") as handle:
+                    raw = handle.read()
+
+            root = _ET.fromstring(raw)
+            for datasource in root.findall(".//datasources/datasource"):
+                repository = datasource.find("repository-location")
+                connection = datasource.find("connection")
+                is_published = repository is not None or (
+                    connection is not None and (connection.get("class") or "") == "sqlproxy")
+                if not is_published:
+                    continue
+                label = (repository.get("id", "") if repository is not None else "") \
+                    or datasource.get("caption", "") or datasource.get("name", "")
+                if label and label not in names:
+                    names.append(label)
+        except Exception:                             # noqa: BLE001 - diagnostic only
+            return []
+        return names
+
+    def fetch_published_datasources(self, server_url, pat_name, pat_secret, site):
+        """Downloads the published datasources this workbook reads from.
+
+        Returns the paths of the .tdsx files written beside the workbook. Each
+        carries its own .hyper, which is where the rows are.
+
+        Failure is never fatal: the migration continues with structure only and
+        says which datasource it could not fetch.
+        """
+        wanted = self._referenced_published_datasources()
+        if not wanted:
+            return []
+
+        downloaded = []
+        session = None
+        try:
+            session = tableau_client.sign_in(server_url, pat_name, pat_secret, site,
+                                             note=self.note)
+            available = tableau_client.list_datasources(session, note=self.note)
+            # Matched on the repository id, which is the datasource's contentUrl,
+            # falling back to its display name.
+            by_key = {}
+            for entry in available:
+                for key in (entry.get("contentUrl"), entry.get("name")):
+                    if key:
+                        by_key.setdefault(str(key).lower(), entry)
+
+            for label in wanted:
+                entry = by_key.get(str(label).lower())
+                if not entry:
+                    self.note("[export] Could not find a published datasource named %r "
+                              "on this site; its rows are not available." % label)
+                    continue
+                if not entry.get("hasExtracts"):
+                    self.note("[export] Published datasource %r has no extract on the "
+                              "server -- it is a live connection, so it holds no rows "
+                              "to migrate." % label)
+                    continue
+
+                dest = os.path.join(self.work_dir, "%s.tdsx" % safe_stem(
+                    entry.get("name") or label, "tableau").rsplit(".", 1)[0])
+                try:
+                    tableau_client.download_datasource(
+                        session, entry["id"], dest, note=self.note,
+                        free_space_check=lambda directory: require_free_space(
+                            directory, MIN_FREE_BYTES, self.note))
+                    downloaded.append(dest)
+                except Exception as err:              # noqa: BLE001
+                    self.note("[export] Could not download published datasource %r: %s"
+                              % (label, err))
+        except Exception as err:                      # noqa: BLE001
+            self.note("[export] Could not fetch published datasources: %s" % err)
+        finally:
+            if session:
+                tableau_client.sign_out(session)
+
+        return downloaded
+
+    def _report_extract_inventory(self):
+        """Say what data the downloaded workbook actually contains.
+
+        Rows reaching Fabric depend on a chain -- the download has to include
+        the extract, the extract has to be a readable format, and the reader has
+        to be installed in this interpreter. When the published tables come out
+        empty, every one of those looks identical from the log. This states the
+        first two links outright so the search starts in the right place.
+        """
+        try:
+            import zipfile as _zipfile
+            if not _zipfile.is_zipfile(self.input_path):
+                self.note("[export] The workbook is a bare .twb (no packaged data), "
+                          "so it carries structure only. Its rows live in whatever "
+                          "it connects to.")
+                return
+            with _zipfile.ZipFile(self.input_path) as archive:
+                extracts = [(i.filename, i.file_size) for i in archive.infolist()
+                            if i.filename.lower().endswith((".hyper", ".tde"))]
+        except Exception as err:                  # noqa: BLE001 - diagnostic only
+            self.note("[export] Could not inspect the workbook's contents: %s" % err)
+            return
+
+        if not extracts:
+            # Two very different situations look identical here. A workbook on a
+            # live database connection genuinely has no rows to migrate; a
+            # workbook built on a *published datasource* has plenty, they just
+            # live in a separate item on the server. The workbook XML says which.
+            published = self._referenced_published_datasources()
+            if published:
+                self.note(
+                    "[export] This workbook packages no extract because it reads from "
+                    "%d datasource(s) published separately on the server: %s. Their "
+                    "rows are fetched from those items."
+                    % (len(published), ", ".join(published)))
+            else:
+                self.note(
+                    "[export] This workbook packages no .hyper extract.")
+                # Listed rather than summarised: a .twbx built on a local file
+                # with a live connection packages the raw CSV or workbook file
+                # instead of an extract, and that is indistinguishable from
+                # "no data" unless the contents are actually shown.
+                self._note_archive_contents()
+            return
+
+    def _note_archive_contents(self):
+        """Names the largest things inside the workbook archive.
+
+        Reported because every remaining explanation for a workbook that
+        migrates without rows -- packaged CSV, packaged Excel, images only,
+        published datasource -- looks the same from outside, and the archive
+        listing separates them in one line.
+        """
+        try:
+            import zipfile as _zipfile
+            with _zipfile.ZipFile(self.input_path) as archive:
+                entries = sorted(archive.infolist(),
+                                 key=lambda i: i.file_size, reverse=True)
+        except Exception as err:                      # noqa: BLE001
+            self.note("[export] Could not list the workbook's contents: %s" % err)
+            return
+
+        shown = [i for i in entries if not i.is_dir()][:8]
+        if not shown:
+            self.note("[export] The workbook archive is empty.")
+            return
+        self.note("[export] Archive holds: %s"
+                  % "; ".join("%s (%s)" % (i.filename, human_bytes(i.file_size))
+                              for i in shown))
+
+        total = sum(size for _name, size in extracts)
+        self.note("[export] Workbook packages %d extract(s), %s uncompressed: %s"
+                  % (len(extracts), human_bytes(total),
+                     ", ".join(os.path.basename(n) for n, _s in extracts[:5])))
+
+        if any(name.lower().endswith(".tde") for name, _size in extracts) and \
+                not any(name.lower().endswith(".hyper") for name, _size in extracts):
+            self.note("[export] The extract is the legacy .tde format, which has no "
+                      "public reader. Re-save the workbook in a current Tableau "
+                      "version to convert it to .hyper.")
+            return
+
+        # The reader is checked here, before the engine runs, because "installed
+        # on this machine" and "installed in the interpreter running the engine"
+        # are different things, and the second is the one that matters.
+        probe = subprocess.run(
+            [sys.executable, "-c", "import tableauhyperapi"],
+            capture_output=True, text=True)
+        if probe.returncode != 0:
+            self.note(
+                "[export] WARNING: the extract cannot be read -- tableauhyperapi is "
+                "not installed in %s, which is the interpreter that runs the engine. "
+                "The migration will complete with the correct schema and no rows. "
+                "Install it with:  \"%s\" -m pip install tableauhyperapi"
+                % (sys.executable, sys.executable))
+        else:
+            self.note("[export] tableauhyperapi is available; the extract will be read.")
 
     def _export_then_run(self, tenant, app_id, authorization):
         self.status = "exporting"
@@ -432,6 +635,11 @@ class MigrationRun:
             source_flag, self.input_path,
             "--output", self.output_dir,
         ]
+
+        # Extracts that live outside the workbook -- published datasources it
+        # reads from. Without these such a workbook migrates with schema only.
+        for path in getattr(self, "_extra_data_files", []) or []:
+            command += ["--extra-extract", path]
 
         tenant, app_id, authorization = getattr(self, "_qlik_source", (None, None, None))
         if tenant and app_id:

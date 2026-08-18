@@ -431,6 +431,90 @@ def download_workbook(session, workbook_id, dest_path, include_extract=False,
     return written, filename
 
 
+def list_datasources(session, page_size=100, max_pages=100, note=None):
+    """Every published datasource visible on the signed-in site.
+
+    A workbook built on a published datasource packages no extract of its own --
+    the rows live in the datasource item. Migrating such a workbook without
+    these would produce a model with the right schema and no data.
+    """
+    datasources = []
+    page = 1
+    while page <= max_pages:
+        url = "%s/datasources?pageSize=%d&pageNumber=%d" % (session.site_url, page_size, page)
+        with _open(_request(url, session.token),
+                   METADATA_TIMEOUT_SECONDS, "Listing datasources") as response:
+            root = ET.fromstring(response.read())
+
+        found = root.findall(".//t:datasources/t:datasource", NS)
+        for datasource in found:
+            project = datasource.find("t:project", NS)
+            datasources.append({
+                "id": datasource.get("id", ""),
+                "name": datasource.get("name", ""),
+                "contentUrl": datasource.get("contentUrl", ""),
+                "type": datasource.get("type", ""),
+                "hasExtracts": (datasource.get("hasExtracts", "") or "").lower() == "true",
+                "project": project.get("name", "") if project is not None else "",
+            })
+
+        pagination = root.find(".//t:pagination", NS)
+        if pagination is None:
+            break
+        try:
+            total = int(pagination.get("totalAvailable", "0"))
+        except ValueError:
+            break
+        if page * page_size >= total or not found:
+            break
+        page += 1
+
+    if note:
+        note("[tableau] Site has %d published datasource(s)." % len(datasources))
+    return datasources
+
+
+def download_datasource(session, datasource_id, dest_path, include_extract=True,
+                        note=None, free_space_check=None):
+    """Downloads one published datasource (.tdsx) to dest_path.
+
+    A .tdsx is a zip like a .twbx and carries the datasource's .hyper extract,
+    which is where a workbook bound to it keeps its rows.
+    """
+    if not datasource_id:
+        raise TableauError("No datasource id was supplied.")
+
+    url = "%s/datasources/%s/content?includeExtract=%s" % (
+        session.site_url,
+        urllib.parse.quote(str(datasource_id)),
+        "true" if include_extract else "false",
+    )
+    if note:
+        note("[tableau] Downloading published datasource %s…" % datasource_id)
+    if free_space_check:
+        free_space_check(os.path.dirname(dest_path))
+
+    written = 0
+    with _open(_request(url, session.token, accept="*/*"),
+               DOWNLOAD_TIMEOUT_SECONDS, "Downloading the datasource") as response:
+        filename = _filename_from(response.headers.get("Content-Disposition"),
+                                  datasource_id)
+        try:
+            with open(dest_path, "wb") as handle:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    written += len(chunk)
+        except OSError as err:
+            raise TableauError("Could not write the downloaded datasource: %s" % err)
+
+    if note:
+        note("[tableau] Downloaded %s (%.1f MB)." % (filename, written / 1048576.0))
+    return written, filename
+
+
 def _filename_from(content_disposition, fallback_id):
     """Pulls the filename out of a Content-Disposition header.
 

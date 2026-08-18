@@ -93,6 +93,9 @@ class TableauExtractor:
         self.variables = []         # Tableau parameters
         self.app_properties = {}
         self.problems = []          # everything that could not be read
+        # Datasources published as their own item on the server. Their rows are
+        # not in this workbook; the caller fetches them separately.
+        self.published_datasources = []
 
         # local-name -> caption, so a shelf reference like [Calculation_123]
         # can be reported under the name a user would recognise.
@@ -248,6 +251,23 @@ class TableauExtractor:
             return
 
         connection = datasource.find("connection")
+
+        # A datasource published separately on the server. Its rows live in that
+        # item, not in this workbook -- a .twbx built on one packages no extract
+        # at all, which otherwise looks identical to a live database connection
+        # and is reported as one. Recorded so the caller can fetch the
+        # datasource and read its extract instead.
+        repository = datasource.find("repository-location")
+        if repository is not None or (
+                connection is not None and (connection.get("class") or "") == "sqlproxy"):
+            self.published_datasources.append({
+                "caption": caption,
+                "name": name,
+                "id": (repository.get("id", "") if repository is not None else ""),
+                "revision": (repository.get("revision", "") if repository is not None else ""),
+                "site": (repository.get("site", "") if repository is not None else ""),
+            })
+
         relations = {}
         if connection is not None:
             self._collect_relations(connection, caption, relations)
@@ -673,6 +693,16 @@ class TableauExtractor:
         print("      %d table(s), %d field(s), %d calculation(s), %d join(s)"
               % (len(self.tables), len(self.fields), len(self.calculations),
                  len(self.relationships)))
+
+        if self.published_datasources:
+            names = ", ".join(d["caption"] for d in self.published_datasources)
+            print("      %d published datasource(s) referenced: %s"
+                  % (len(self.published_datasources), names))
+            self.problems.append(
+                "This workbook reads from %d datasource(s) published separately on "
+                "the server (%s). Their rows live in those items, not in the "
+                "workbook, which is why it packages no extract."
+                % (len(self.published_datasources), names))
 
         print("[4/5] Reading worksheets...")
         for worksheet in self.root.findall(".//worksheets/worksheet"):

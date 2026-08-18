@@ -4309,7 +4309,18 @@ ${(appData.gaps && appData.gaps.length)
                 document.getElementById("fabric-extra-fields").style.display = "block";
                 btnTestFabric.style.display = "none";
 
-                const connected = `Connected. Loaded ${usable.length} workspace${usable.length === 1 ? "" : "s"} — pick the destination below.`;
+                // Says whose list this is. The count is almost always smaller
+                // than what the signed-in person sees in Fabric's own sidebar,
+                // because this is the service principal's membership, not
+                // theirs — and a workspace they just created is the usual case
+                // of one that is missing. Without this the picker looks broken.
+                const connected =
+                    `Connected. Loaded ${usable.length} workspace${usable.length === 1 ? "" : "s"} — pick the destination below.\n\n` +
+                    `This lists only workspaces the service principal is a member of, which is ` +
+                    `normally fewer than you see signed in as yourself. If one is missing — a ` +
+                    `workspace you just created, for instance — open it in Fabric and add the ` +
+                    `app registration under Manage access as Admin, Member or Contributor, ` +
+                    `then test the connection again.`;
                 if (storageToken) {
                     setConnStatus("fabric-status", "success",
                         `${connected}\nOneLake access confirmed — large tables will be staged to a Lakehouse.`);
