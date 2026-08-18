@@ -157,8 +157,10 @@
 
                             <p class="form-hint">
                                 Create the key in the Qlik Management Console under <b>API keys</b>. Paste the
-                                token only — no <code>Bearer</code> prefix. For the browser to reach your tenant,
-                                add this app's origin under <b>Management Console &rarr; Content Security Policy</b>.
+                                token only — no <code>Bearer</code> prefix. Calls to your tenant are relayed by
+                                this app's own server, so no <b>Content Security Policy</b> entry is needed —
+                                but the page must be served by <code>python dev_server.py</code>, not opened
+                                from disk or served by a plain static file server.
                             </p>
                         </div>
 

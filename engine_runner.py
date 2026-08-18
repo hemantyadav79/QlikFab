@@ -321,7 +321,7 @@ class MigrationRun:
         require_free_space(self.work_dir, MIN_FREE_BYTES, self.note)
 
     def start(self):
-        threading.Thread(target=self._run, daemon=True).start()
+        threading.Thread(target=lambda: self._guarded(self._run), daemon=True).start()
 
     def start_from_qlik(self, tenant, app_id, authorization):
         """Exports the app from the tenant, then runs the engine on it.
@@ -332,8 +332,8 @@ class MigrationRun:
         dropping.
         """
         threading.Thread(
-            target=self._export_then_run,
-            args=(tenant, app_id, authorization),
+            target=lambda: self._guarded(
+                lambda: self._export_then_run(tenant, app_id, authorization)),
             daemon=True,
         ).start()
 
@@ -344,8 +344,9 @@ class MigrationRun:
         Tableau -> here -> engine, never out to the browser and back.
         """
         threading.Thread(
-            target=self._download_tableau_then_run,
-            args=(server_url, pat_name, pat_secret, site, workbook_id),
+            target=lambda: self._guarded(
+                lambda: self._download_tableau_then_run(
+                    server_url, pat_name, pat_secret, site, workbook_id)),
             daemon=True,
         ).start()
 
@@ -385,13 +386,25 @@ class MigrationRun:
                 self.note("[export] Could not rename to %s (%s); continuing." % (actual, err))
 
         self.note("[export] Wrote %.2f MB to %s" % (size / 1048576.0, self.filename))
-        self._report_extract_inventory()
 
-        # A workbook bound to a published datasource keeps its rows in that
-        # item, so it has to be fetched too or the migration carries schema
-        # only. Done here, while the credential is still in hand.
-        self._extra_data_files = self.fetch_published_datasources(
-            server_url, pat_name, pat_secret, site)
+        # Everything from here on is guarded. This runs on a daemon thread, so
+        # an exception escaping it kills the thread with the run still marked
+        # "exporting" -- the UI then spins forever with no error and no log
+        # line, which is indistinguishable from a slow download.
+        try:
+            self._report_extract_inventory()
+
+            # A workbook bound to a published datasource keeps its rows in that
+            # item, so it has to be fetched too or the migration carries schema
+            # only. Done here, while the credential is still in hand.
+            self._extra_data_files = self.fetch_published_datasources(
+                server_url, pat_name, pat_secret, site)
+        except Exception as err:      # noqa: BLE001 - never fatal on its own
+            # Inspecting the workbook is a convenience; failing it must not lose
+            # a download that succeeded. The engine still runs on what we have.
+            self.note("[export] Could not finish inspecting the workbook (%s); "
+                      "continuing with the migration." % err)
+            self._extra_data_files = []
 
         self._run()
 
@@ -446,6 +459,12 @@ class MigrationRun:
         wanted = self._referenced_published_datasources()
         if not wanted:
             return []
+
+        # Announced before it starts: signing in and listing a site's
+        # datasources takes seconds to minutes, and without this the log simply
+        # stops after the archive listing with nothing to say it is still busy.
+        self.note("[export] Fetching %d published datasource(s) this workbook "
+                  "reads from: %s" % (len(wanted), ", ".join(wanted)))
 
         downloaded = []
         session = None
@@ -608,6 +627,20 @@ class MigrationRun:
         # cannot reach a file path on this machine.
         self._qlik_source = (tenant, app_id, authorization)
         self._run()
+
+    def _guarded(self, work):
+        """Runs one phase of a background run, failing it loudly on error.
+
+        A run executes on a daemon thread. Without this an exception ends the
+        thread silently and leaves the run in whatever status it had reached,
+        which the UI displays as still running -- forever.
+        """
+        try:
+            work()
+        except Exception as err:      # noqa: BLE001 - reported to the UI verbatim
+            self.status = "failed"
+            self.error = str(err)
+            self.note("[runner] %s" % err)
 
     def _run(self):
         if not os.path.exists(ENGINE_SCRIPT):

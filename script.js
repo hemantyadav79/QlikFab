@@ -3455,6 +3455,56 @@ ${(appData.gaps && appData.gaps.length)
     // same-origin here and an ordinary server call at the tenant.
     let usedProxy = false;
 
+    // Why a request never reached Qlik, established rather than assumed.
+    //
+    // A fetch that fails with a TypeError was previously always reported as
+    // CORS. That is only possible when the page calls the tenant directly --
+    // which it does only when opened from disk. Served over http the call goes
+    // through this app's own /qlik-proxy, server to server, where CORS does not
+    // apply at all: a TypeError there means the local relay is not answering,
+    // and sending someone to the Qlik Management Console to fix that costs them
+    // an afternoon. The relay is probed to tell the three cases apart.
+    async function describeTransportFailure() {
+        if (!usedProxy) {
+            return "The browser blocked the request before it reached Qlik (CORS).\n\n" +
+                "This page is open directly from disk, so it has to call your tenant " +
+                "itself. Serve it with `python dev_server.py 5173` and open " +
+                "http://localhost:5173 instead — the request then goes through this " +
+                "app's own relay and CORS stops applying.";
+        }
+
+        let probe = null;
+        try {
+            probe = await fetch(`${window.location.origin}/qlik-proxy?target=`, { method: "GET" });
+        } catch (e) {
+            return "This page could not reach the server that is serving it, at " +
+                `${window.location.origin}.\n\n` +
+                "The migration server has stopped, or the browser is pointed at a " +
+                "port nothing is listening on. Start it with `python dev_server.py 5173` " +
+                "and reload.\n\nNothing is wrong with your Qlik tenant or API key — " +
+                "the request never left this machine.";
+        }
+
+        // dev_server answers a target-less proxy call with a JSON complaint.
+        // Anything else on this port is not it.
+        let body = "";
+        try { body = (await probe.text()).slice(0, 200); } catch (e) { /* reported below */ }
+        if (probe.ok || body.includes("proxyError")) {
+            return "The relay is running but the request to your Qlik tenant did not " +
+                "complete.\n\nThat is usually a network path problem — a proxy, VPN or " +
+                "firewall between this machine and the tenant — rather than anything " +
+                "about the API key. Check that this machine can reach the tenant URL " +
+                "in a browser tab.";
+        }
+
+        return "This page is being served by something that is not the migration " +
+            `server: ${window.location.origin}/qlik-proxy answered ` +
+            `${probe.status}, so the relay it needs does not exist.\n\n` +
+            "Serve the app with `python dev_server.py 5173` rather than a plain " +
+            "static file server (Live Server, `python -m http.server`, `npx serve`), " +
+            "then reload.\n\nNothing is wrong with your Qlik tenant or API key.";
+    }
+
     function qlikRequestUrl(absoluteUrl) {
         if (window.location.protocol === "file:") {
             usedProxy = false;
@@ -4037,9 +4087,7 @@ ${(appData.gaps && appData.gaps.length)
             } catch (err) {
                 console.error(err);
                 if (err.name === "TypeError" && (err.message.includes("fetch") || err.message.includes("Network"))) {
-                    setConnStatus("qlik-status", "error",
-                        "The browser blocked the request before it reached Qlik (CORS).\n\n" +
-                        `In the Qlik Management Console → Content Security Policy, add an origin entry for '${window.location.origin}' with Connect-src enabled.`);
+                    setConnStatus("qlik-status", "error", await describeTransportFailure());
                 } else {
                     setConnStatus("qlik-status", "error", `Connection failed.\n\n${err.message}`);
                 }
