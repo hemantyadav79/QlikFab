@@ -25,6 +25,7 @@ is used rather than a hypercube because a hypercube over N dimensions returns
 collapse into one, which is a data-fidelity bug that looks like a smaller
 dataset rather than an error.
 """
+import re
 import json
 import ssl
 import sys
@@ -61,6 +62,24 @@ DEFAULT_MAX_ROWS = 50000
 
 CONNECT_TIMEOUT_SECONDS = 30
 CALL_TIMEOUT_SECONDS = 120
+
+
+class QlikColumnCountError(RuntimeError):
+    """The engine returned a different number of columns than it listed.
+
+    Carried separately from QlikDataError so the caller can react to it: the
+    field list and the data call can legitimately disagree (a table with a
+    system field the layout call hides), and that is recoverable by asking for
+    the fuller list rather than abandoning the table.
+    """
+
+    def __init__(self, observed, expected):
+        self.observed = observed
+        self.expected = expected
+        super().__init__(
+            "Qlik returned a row with %d value(s) for a table with %d field(s); "
+            "no rows were read rather than risk misaligned columns."
+            % (observed, expected))
 
 
 class QlikDataError(RuntimeError):
@@ -190,7 +209,7 @@ class QixSession:
 
     # ---------- data ----------
 
-    def table_layout(self) -> dict:
+    def table_layout(self, include_sys_vars: bool = False) -> dict:
         """
         Field names and row counts per data-model table.
 
@@ -207,7 +226,7 @@ class QixSession:
             "qNullSize": {"qcx": 0, "qcy": 0},
             "qCellHeight": 30,
             "qSyntheticMode": False,
-            "qIncludeSysVars": False,
+            "qIncludeSysVars": include_sys_vars,
         })
         layout = {}
         for table in result.get("qtr") or []:
@@ -220,6 +239,67 @@ class QixSession:
                 "rows": table.get("qNoOfRows"),
             }
         return layout
+
+    def table_field_variants(self, table_name: str):
+        """Every field list the engine will admit for one table, labelled.
+
+        GetTablesAndKeys and GetTableData can report different widths for the
+        same table, and which toggle reconciles them depends on what the app
+        contains -- a system field, a synthetic key, or a key field the table
+        record omits. Rather than guess one, every combination is offered and
+        the caller keeps whichever matches the data call's actual width.
+        """
+        seen = set()
+        for synthetic in (False, True):
+            for sys_vars in (False, True):
+                label = "syntheticMode=%s, includeSysVars=%s" % (synthetic, sys_vars)
+                try:
+                    result = self._call("GetTablesAndKeys", self._doc_handle, {
+                        "qWindowSize": {"qcx": 10000, "qcy": 10000},
+                        "qNullSize": {"qcx": 0, "qcy": 0},
+                        "qCellHeight": 30,
+                        "qSyntheticMode": synthetic,
+                        "qIncludeSysVars": sys_vars,
+                    })
+                except QlikDataError:
+                    continue
+
+                for table in result.get("qtr") or []:
+                    if table.get("qName") != table_name:
+                        continue
+                    columns = [f.get("qName") for f in (table.get("qFields") or [])
+                               if f.get("qName")]
+                    if columns and tuple(columns) not in seen:
+                        seen.add(tuple(columns))
+                        yield label, columns
+
+                    # Key fields are sometimes carried in the response's key
+                    # list rather than on the table record itself.
+                    keys = []
+                    for key in result.get("qk") or []:
+                        for field in (key.get("qKeyFields") or []):
+                            name = field.get("qName") if isinstance(field, dict) else field
+                            if name and name not in columns:
+                                keys.append(name)
+                    if keys:
+                        widened = columns + keys
+                        if tuple(widened) not in seen:
+                            seen.add(tuple(widened))
+                            yield label + " + key fields", widened
+
+    def sample_row(self, table_name: str):
+        """One row of raw values, for reporting a width that cannot be matched."""
+        try:
+            result = self._call("GetTableData", self._doc_handle, {
+                "qOffset": 0, "qRows": 1, "qSyntheticMode": False,
+                "qTableName": table_name,
+            })
+        except QlikDataError:
+            return []
+        page = result.get("qData") or []
+        if not page or not isinstance(page[0], dict):
+            return []
+        return [_cell_value(cell) for cell in (page[0].get("qValue") or [])]
 
     def read_table(self, table_name: str, columns, max_rows: int = DEFAULT_MAX_ROWS,
                    expected_rows: int = None):
@@ -305,6 +385,33 @@ def _humanise(seconds):
     return "%dm %02ds" % (seconds // 60, seconds % 60)
 
 
+# Fields Qlik creates for its own bookkeeping. A synthetic key is the join
+# Qlik invented between tables sharing several field names; it has no meaning
+# outside the Qlik engine, and carrying it into Power BI puts a column named
+# "$Syn 1" in front of the user next to their real ones.
+#
+# Matched narrowly and anchored: "$Syn 1" is Qlik's own, whereas a name merely
+# starting with "%" -- "%CaseId" -- is a key the modeller wrote and is kept.
+_INTERNAL_FIELD = re.compile(r"^\$syn\s*\d*$", re.IGNORECASE)
+
+
+def _drop_internal_fields(columns, rows):
+    """Removes Qlik's internal fields from a table that has already been read.
+
+    Done after the read, never before: the column list has to match the width
+    the engine returns or the values land in the wrong columns. Dropping by
+    index afterwards is safe because the position is known exactly.
+    """
+    keep = [i for i, name in enumerate(columns) if not _INTERNAL_FIELD.match(str(name).strip())]
+    if len(keep) == len(columns):
+        return columns, rows, []
+
+    dropped = [columns[i] for i in range(len(columns)) if i not in set(keep)]
+    return ([columns[i] for i in keep],
+            [[row[i] for i in keep] for row in rows],
+            dropped)
+
+
 def _rows_from_page(page, width):
     """
     Normalise one GetTableData response into rows.
@@ -330,11 +437,7 @@ def _rows_from_page(page, width):
             )
         row = [_cell_value(cell) for cell in (entry.get("qValue") or [])]
         if len(row) != width:
-            raise QlikDataError(
-                "Qlik returned a row with %d value(s) for a table with %d field(s); "
-                "no rows were read rather than risk misaligned columns."
-                % (len(row), width)
-            )
+            raise QlikColumnCountError(len(row), width)
         rows.append(row)
     return rows
 
@@ -420,6 +523,53 @@ def read_app_tables(tenant, app_id, authorization, table_names,
                     actual, columns, max_rows,
                     expected_rows=available[actual].get("rows"),
                 )
+            except QlikColumnCountError as err:
+                # GetTablesAndKeys and GetTableData disagree about this table's
+                # width. Which toggle reconciles them depends on the app, so
+                # every field list the engine will admit is tried and the one
+                # matching the data call's actual width wins. Nothing is
+                # assumed about where an extra column sits.
+                note("[qix] %s reports %d field(s) but returns %d column(s); "
+                     "looking for a field list that matches."
+                     % (actual, err.expected, err.observed))
+
+                matched = None
+                tried = []
+                try:
+                    for label, candidate in session.table_field_variants(actual):
+                        tried.append("%s -> %d" % (label, len(candidate)))
+                        if len(candidate) == err.observed:
+                            matched = (label, candidate)
+                            break
+                except QlikDataError as variant_err:
+                    note("[qix] Could not enumerate field lists: %s" % variant_err)
+
+                if not matched:
+                    # Reported with the evidence, because the alternative is
+                    # another round of guessing at what the extra column is.
+                    sample = session.sample_row(actual)
+                    problems[name] = (
+                        "%s None of the field lists Qlik offers is %d wide (tried: %s). "
+                        "The %d known field(s) are: %s. The first row's %d value(s) are: "
+                        "%s. The table was left empty rather than filled in the wrong "
+                        "order."
+                        % (err, err.observed, "; ".join(tried) or "none",
+                           len(columns), ", ".join(map(str, columns)),
+                           len(sample),
+                           ", ".join(repr(v)[:24] for v in sample) or "unavailable"))
+                    continue
+
+                label, columns = matched
+                note("[qix] %s: matched with %s (%d column(s))."
+                     % (actual, label, len(columns)))
+                try:
+                    rows, truncated = session.read_table(
+                        actual, columns, max_rows,
+                        expected_rows=available[actual].get("rows"),
+                    )
+                except (QlikDataError, QlikColumnCountError) as retry_err:
+                    problems[name] = str(retry_err)
+                    continue
             except QlikDataError as err:
                 problems[name] = str(err)
                 continue
@@ -432,6 +582,11 @@ def read_app_tables(tenant, app_id, authorization, table_names,
                        if expected else " (the table is empty in the app).")
                 )
                 continue
+
+            columns, rows, dropped = _drop_internal_fields(columns, rows)
+            if dropped:
+                note("[qix] %s: dropped %d Qlik-internal field(s): %s"
+                     % (name, len(dropped), ", ".join(dropped)))
 
             data[name] = {"columns": list(columns), "rows": rows, "truncated": truncated}
             note("[qix] %s: %d of %s row(s), %d column(s)%s"

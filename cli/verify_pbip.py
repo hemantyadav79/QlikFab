@@ -146,14 +146,31 @@ def check(project_dir):
                         f'does not define (has: {sorted(shared)})')
 
                 # Declaring int64 over a column written as text describes data
-                # that is not there.
+                # that is not there. Looked up by sourceColumn, which is the
+                # name the Parquet actually carries -- it differs from the
+                # display name whenever the original held a space or
+                # punctuation, and matching on the display name silently
+                # matched nothing at all.
                 for column in t.get('columns', []):
-                    written = (staged_types.get(t['name']) or {}).get(column['name'])
+                    physical = column.get('sourceColumn') or column['name']
+                    written = (staged_types.get(t['name']) or {}).get(physical)
                     if written and written != column.get('dataType'):
                         fails.append(
                             f'{name}/{t["name"]}: column {column["name"]!r} is declared '
                             f'{column.get("dataType")!r} but the staged Parquet holds '
                             f'{written!r}')
+
+                    # A Lakehouse rejects the whole table load for one illegal
+                    # column name, naming none of them.
+                    if not re.fullmatch(r'\w+', physical, flags=re.UNICODE):
+                        fails.append(
+                            f'{name}/{t["name"]}: column {column["name"]!r} maps to '
+                            f'source column {physical!r}, which a Lakehouse will not '
+                            f'accept — only word characters and underscores are legal')
+                    elif len(physical) > 128:
+                        fails.append(
+                            f'{name}/{t["name"]}: source column {physical!r} is '
+                            f'{len(physical)} characters; the Lakehouse limit is 128')
                 continue
 
             expr = source.get('expression')
@@ -211,8 +228,27 @@ def check(project_dir):
                     fails.append(f'{name}/{t["name"]}/{m["name"]}: unknown column {ref_t}[{ref_c}]')
 
     # Every visual projection must resolve.
+    # The visualContainer schema declares additionalProperties:false, so any key
+    # at the root beyond these fails the whole report import -- and Fabric
+    # rejects the report as a unit, so one stray property loses every page.
+    # `visualContainerObjects` in particular belongs inside `visual`, one level
+    # down, and is easy to attach here by mistake.
+    allowed_visual_root = {
+        '$schema', 'name', 'position', 'visual', 'visualGroup', 'parentGroupName',
+        'filterConfig', 'howCreated', 'isHidden',
+    }
+
     for vp in glob.glob(os.path.join(project_dir, '*.Report', 'definition', 'pages', '*', 'visuals', '*', 'visual.json')):
         v = json.load(open(vp, encoding='utf-8'))
+
+        for key in sorted(set(v) - allowed_visual_root):
+            hint = (' (it belongs inside "visual")'
+                    if key == 'visualContainerObjects' else '')
+            fails.append(
+                f'{name}/visual: {os.path.basename(os.path.dirname(vp))} has root '
+                f'property {key!r}, which the visualContainer schema does not '
+                f'allow{hint}')
+
         qs = v.get('visual', {}).get('query', {}).get('queryState', {})
         for role, spec in qs.items():
             for proj in spec.get('projections', []):

@@ -730,7 +730,8 @@ class UniversalModelGenerator:
             "    Source",
         ]
 
-    def _direct_lake_table(self, safe: str, columns: list, written_types: dict = None) -> dict:
+    def _direct_lake_table(self, safe: str, columns: list, written_types: dict = None,
+                           physical_columns: dict = None) -> dict:
         """
         One Direct Lake table.
 
@@ -747,14 +748,18 @@ class UniversalModelGenerator:
         BLANK over a table that visibly has data.
         """
         written_types = written_types or {}
+        physical = physical_columns or {}
         return {
             "name": safe,
             "lineageTag": new_guid(),
             "columns": [
                 {
                     "name": name,
-                    "dataType": written_types.get(name) or self.resolver.resolve(name),
-                    "sourceColumn": name,
+                    "dataType": (written_types.get(physical.get(name, name))
+                                 or self.resolver.resolve(name)),
+                    # The name the Delta table actually carries, which differs
+                    # whenever the original held a space or punctuation.
+                    "sourceColumn": physical.get(name, name),
                     "lineageTag": new_guid(),
                 }
                 for name in columns
@@ -778,7 +783,7 @@ class UniversalModelGenerator:
         The publisher reads the manifest rather than globbing the directory, so
         a partially written stage cannot be mistaken for a complete one.
         """
-        from parquet_writer import write_parquet
+        from parquet_writer import write_parquet, lakehouse_column_map
 
         # generate() runs more than once per migration (semantic model, then
         # .pbit), and rewriting a 632,000-row Parquet file on the second pass
@@ -789,16 +794,32 @@ class UniversalModelGenerator:
         os.makedirs(self.stage_dir, exist_ok=True)
         entries = []
         for safe, columns, rows in staged:
-            types = {name: self.resolver.resolve(name) for name in columns}
+            # Written under names a Delta table will accept. The model keeps the
+            # original as the column's display name and points sourceColumn at
+            # the physical one, so the rename is invisible in the report.
+            physical = lakehouse_column_map(columns)
+            written_columns = [physical[c] for c in columns]
+            types = {physical[name]: self.resolver.resolve(name) for name in columns}
+
+            renamed = [(c, physical[c]) for c in columns if physical[c] != c]
+            if renamed:
+                self.stage_notes.append(
+                    "%s: %d column(s) renamed for the Lakehouse, which accepts only "
+                    "word characters and underscores: %s"
+                    % (safe, len(renamed),
+                       ", ".join("%s -> %s" % pair for pair in renamed[:8])))
+
             filename = "%s.parquet" % safe
             path = os.path.join(self.stage_dir, filename)
-            size, notes, actual = write_parquet(path, columns, rows, types)
+            size, notes, actual = write_parquet(path, written_columns, rows, types)
             self.stage_notes.extend(notes)
             entries.append({
                 "table": safe,
                 "file": filename,
                 "rows": len(rows),
                 "columns": list(columns),
+                # Physical name per column, so the model can bind to the file.
+                "physicalColumns": physical,
                 "bytes": size,
                 # What the file genuinely holds, so the model can declare it.
                 "types": actual,
@@ -872,10 +893,13 @@ class UniversalModelGenerator:
         # does not exist. Staging first makes the file the authority.
         self.staged_tables = self._write_stage(staged)
         written = {e["table"]: e.get("types") or {} for e in self.staged_tables}
+        physical_by_table = {e["table"]: e.get("physicalColumns") or {}
+                             for e in self.staged_tables}
         staged_rows = {e["table"]: e.get("rows", 0) for e in self.staged_tables}
 
         for safe, columns, _rows in staged:
-            entry = self._direct_lake_table(safe, columns, written.get(safe, {}))
+            entry = self._direct_lake_table(safe, columns, written.get(safe, {}),
+                                            physical_by_table.get(safe, {}))
             model_tables.append(entry)
 
             # The audit report is built from this. Left unset it reads as an
@@ -1490,7 +1514,13 @@ class UniversalVisualGenerator:
         }
 
         if title:
-            visual["visualContainerObjects"] = {
+            # Inside `visual`, alongside `objects` -- not at the root of the
+            # container. The PBIR visualContainer schema forbids unknown root
+            # properties outright, so putting it there made Fabric reject the
+            # whole report with "Property 'visualContainerObjects' has not been
+            # defined". Only titled visuals carry it, which is why a sample set
+            # whose charts are untitled never hit it.
+            visual["visual"]["visualContainerObjects"] = {
                 "title": [
                     {
                         "properties": {
@@ -2591,6 +2621,27 @@ def main():
     generator.generate()
 
 
+def _warn_if_no_rows(total, problems):
+    """States why a run read nothing, in the run log rather than only the audit.
+
+    A migration that reads no rows still produces a model, a report and a
+    successful publish -- with every visual empty. The reason is the single most
+    useful line in the whole log when that happens, and it was previously
+    recorded only in the audit report, which nobody opens until afterwards.
+    """
+    if total:
+        return
+    print("  " + "-" * 66)
+    print("  [WARN] No rows were read, so every table migrates with its real")
+    print("         schema and no data. Reason(s):")
+    seen = dict.fromkeys(" ".join(str(r).split()) for r in problems.values())
+    for reason in seen:
+        print("           - %s" % (reason[:400] + (" ..." if len(reason) > 400 else "")))
+    if not problems:
+        print("           - The source named no tables to read.")
+    print("  " + "-" * 66)
+
+
 def _read_tableau_data(args, extraction_data):
     """Read rows out of the workbook's own extract.
 
@@ -2634,16 +2685,7 @@ def _read_tableau_data(args, extraction_data):
     # a live-connection workbook and a broken install alike, and the two look
     # identical downstream -- so the reason is stated here, in the run log,
     # rather than only in the audit report nobody opens until later.
-    if not total:
-        print("  " + "-" * 66)
-        print("  [WARN] No rows were read, so every table migrates with its real")
-        print("         schema and no data. Reason(s):")
-        for reason in dict.fromkeys(str(r).strip() for r in problems.values()):
-            first = " ".join(reason.split())
-            print("           - %s" % (first[:400] + (" ..." if len(first) > 400 else "")))
-        if not problems:
-            print("           - The workbook named no tables to read.")
-        print("  " + "-" * 66)
+    _warn_if_no_rows(total, problems)
 
     return data, problems
 
@@ -2710,6 +2752,7 @@ def _read_live_data(args, extraction_data):
     print(f"  [OK] Read {total:,} row(s) across {len(data)} table(s); "
           f"{len(problems)} table(s) could not be read. "
           f"The audit report states what was finally embedded.")
+    _warn_if_no_rows(total, problems)
     return data, problems
 
 

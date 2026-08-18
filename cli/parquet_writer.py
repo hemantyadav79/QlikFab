@@ -13,6 +13,7 @@ present parses. One unparseable value leaves the whole column as text rather
 than silently turning it into nulls -- a column of nulls looks like missing data
 and is much harder to notice than a column of strings.
 """
+import re
 import os
 import sys
 
@@ -60,6 +61,44 @@ def _convert(values, parser):
         except (TypeError, ValueError):
             return None, value
     return out, None
+
+
+# A Lakehouse Delta table accepts only Unicode word characters, the underscore
+# and digits in a column name -- no spaces, no punctuation, 128 characters at
+# most. Qlik and Tableau both routinely produce names like "Case Count" or
+# "$Syn 1", and Fabric rejects the whole table load with "Invalid column
+# name(s)" without saying which column offended.
+_MAX_COLUMN_NAME = 128
+
+
+def lakehouse_column_name(name):
+    """One column name, made legal for a Delta table."""
+    cleaned = re.sub(r"[^\w]", "_", str(name or ""), flags=re.UNICODE)
+    cleaned = cleaned.strip("_") or "Column"
+    # A leading digit is legal in Delta but confuses several downstream tools,
+    # and prefixing is cheaper than discovering which.
+    if cleaned[0].isdigit():
+        cleaned = "C_" + cleaned
+    return cleaned[:_MAX_COLUMN_NAME]
+
+
+def lakehouse_column_map(columns):
+    """Original name -> physical name, unique within the table.
+
+    Uniqueness is enforced because sanitising is lossy: "Case Count" and
+    "Case_Count" both become "Case_Count", and two columns of the same name in
+    one Delta table is a different failure from the one being fixed.
+    """
+    mapping, used = {}, set()
+    for original in columns:
+        candidate = base = lakehouse_column_name(original)
+        suffix = 2
+        while candidate.lower() in used:
+            candidate = "%s_%d" % (base[:_MAX_COLUMN_NAME - 4], suffix)
+            suffix += 1
+        used.add(candidate.lower())
+        mapping[original] = candidate
+    return mapping
 
 
 def build_arrow_table(columns, rows, column_types=None):
