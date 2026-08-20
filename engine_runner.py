@@ -248,6 +248,12 @@ class MigrationRun:
         # carries structure but no data.
         self._qlik_source = (None, None, None)
 
+        # The equivalents for a Tableau-sourced run: the session the workbook
+        # came from, and any credential for the database it connects to live.
+        # Both stay unset for an uploaded .twbx, which is read from disk alone.
+        self._tableau_source = None
+        self._source_credentials = {}
+
         temp_root = get_working_temp_dir()
         self.work_dir = tempfile.mkdtemp(prefix="qlikmig_%s_" % self.id, dir=temp_root)
         self.input_path = os.path.join(self.work_dir, self.filename)
@@ -337,12 +343,23 @@ class MigrationRun:
             daemon=True,
         ).start()
 
-    def start_from_tableau(self, server_url, pat_name, pat_secret, site, workbook_id):
+    def start_from_tableau(self, server_url, pat_name, pat_secret, site, workbook_id,
+                           source_credentials=None):
         """Downloads the workbook from Tableau, then runs the engine on it.
 
         Same shape as start_from_qlik, and same reason: the artefact goes
         Tableau -> here -> engine, never out to the browser and back.
+
+        `source_credentials` is for the database a live workbook connects to.
+        A workbook without an extract packages no rows -- they stay in the
+        database -- and Tableau will not hand back the password it holds for
+        it: it is stored server-side, encrypted, and stripped from the workbook
+        XML on export. So the engine is given one of its own when the operator
+        supplies it, and falls back to asking Tableau for the worksheet's data
+        when they do not.
         """
+        self._tableau_source = (server_url, site, pat_name, pat_secret, workbook_id)
+        self._source_credentials = dict(source_credentials or {})
         threading.Thread(
             target=lambda: self._guarded(
                 lambda: self._download_tableau_then_run(
@@ -712,6 +729,24 @@ class MigrationRun:
         # any process on the machine, and the note above is echoed to the UI.
         if authorization:
             child_env["QLIK_AUTHORIZATION"] = authorization
+
+        # The Tableau session, so a live-connection workbook can fall back to
+        # asking Tableau to run the query with the credential it already holds.
+        tableau = getattr(self, "_tableau_source", None)
+        if tableau:
+            server_url, site, pat_name, pat_secret, workbook_id = tableau
+            child_env.update(
+                TABLEAU_SERVER_URL=server_url or "",
+                TABLEAU_SITE=site or "",
+                TABLEAU_PAT_NAME=pat_name or "",
+                TABLEAU_PAT_SECRET=pat_secret or "",
+                TABLEAU_WORKBOOK_ID=workbook_id or "",
+            )
+
+        # The database behind a live connection, when the operator supplied one.
+        for key, value in (getattr(self, "_source_credentials", None) or {}).items():
+            if value:
+                child_env[str(key)] = str(value)
 
         try:
             process = subprocess.Popen(

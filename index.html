@@ -186,6 +186,47 @@
                                 <input type="password" id="tableau-pat-secret" class="custom-input" placeholder="The secret shown when the token was created" autocomplete="off">
                             </div>
 
+                            <details class="form-group" id="tableau-source-credentials">
+                                <summary>Live database credentials <span class="form-hint">— only for workbooks with no extract</span></summary>
+
+                                <p class="form-hint">
+                                    A workbook on a <b>live connection</b> packages no rows: they stay in the
+                                    database. Tableau will not hand back the password it holds for that
+                                    connection — it is stored server-side, encrypted, and stripped from the
+                                    workbook file on export — so the migration needs one of its own to read
+                                    the real table. Leave this empty and the run falls back to asking Tableau
+                                    for each worksheet's data, which is that sheet's fields at that sheet's
+                                    aggregation, not the table. Workbooks with an extract ignore this entirely.
+                                </p>
+
+                                <div class="form-group">
+                                    <label>Snowflake user</label>
+                                    <input type="text" id="snowflake-user" class="custom-input" placeholder="Leave empty to skip" autocomplete="off">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Snowflake password</label>
+                                    <input type="password" id="snowflake-password" class="custom-input" placeholder="Used for this run only" autocomplete="off">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Warehouse</label>
+                                    <input type="text" id="snowflake-warehouse" class="custom-input" placeholder="Leave empty to use the one the workbook names" autocomplete="off">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Role</label>
+                                    <input type="text" id="snowflake-role" class="custom-input" placeholder="Leave empty for the user's default role" autocomplete="off">
+                                </div>
+
+                                <p class="form-hint">
+                                    Account, database and schema are read from the workbook itself. The user
+                                    needs <code>SELECT</code> on the tables the workbook reads and access to a
+                                    warehouse. Nothing is stored: the values are handed to the migration
+                                    engine for this run and discarded with it.
+                                </p>
+                            </details>
+
                             <p class="form-hint">
                                 Create the token under <b>My Account Settings &rarr; Personal Access Tokens</b>.
                                 The <b>site content URL</b> is the segment in the browser address bar after

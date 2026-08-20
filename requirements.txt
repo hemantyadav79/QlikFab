@@ -36,3 +36,13 @@ tableauhyperapi>=0.0.14000 ; python_version >= "3.8"
 # OPTIONAL for the same reason as above: without it such a workbook still
 # migrates, with its real schema and no rows, and says so per table.
 openpyxl>=3.1
+
+# Reader for the live database a Tableau workbook connects to, when the
+# workbook has no extract and so packages no rows of its own.
+#
+# OPTIONAL, for the same reason as the line above and the mirror of it: this
+# one is needed exactly when that one is not. Without it a live-connection
+# workbook still migrates -- the run falls back to asking Tableau for each
+# worksheet's data, and the audit report records that those rows are the
+# sheet's rather than the table's. Qlik migrations never need it.
+snowflake-connector-python>=3.0 ; python_version >= "3.8"

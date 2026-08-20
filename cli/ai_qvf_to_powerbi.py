@@ -507,7 +507,8 @@ class UniversalModelGenerator:
     def __init__(self, extraction_data: dict, ai_brain: AIConverterBrain, server: str = None,
                  database: str = "postgres", mode: str = "offline",
                  embedded_data: dict = None, data_problems: dict = None,
-                 embed_budget_bytes: int = None, stage_dir: str = None):
+                 embed_budget_bytes: int = None, stage_dir: str = None,
+                 data_notes: list = None):
         self.data = extraction_data
         self.ai = ai_brain
         self.server = server
@@ -524,6 +525,11 @@ class UniversalModelGenerator:
         # never data.
         self.embedded_data = embedded_data or {}
         self.data_problems = data_problems or {}
+        # Caveats about where the rows came from, for tables that were read but
+        # not from the source the model names -- a worksheet's data standing in
+        # for a live table, say. A table can be read and still not be what a
+        # reader would assume, and that difference belongs in the report.
+        self.data_notes = list(data_notes or [])
         self.embed_budget_bytes = embed_budget_bytes or self.DEFAULT_EMBED_BUDGET_BYTES
 
         # When set, rows are written to Parquet here and the model reads them as
@@ -558,6 +564,15 @@ class UniversalModelGenerator:
         # as they are built and handed to the visual generator so a visual can
         # never project a measure that does not exist.
         self.built_measures = {}
+
+        # Every measure name already spoken for, lower-cased, mapped to the
+        # table that claimed it. A measure name is unique across the whole
+        # model in Power BI, not per table -- two tables that both carry an AGE
+        # column would each want "Total AGE", and Fabric refuses the import
+        # outright: "Could not add Measure with the name 'Total AGE' because a
+        # Measure with the same name already exists". The model builds fine
+        # locally, so this only ever surfaced at publish.
+        self.measure_names = {}
 
         # The largest table is the sensible default for visuals whose field
         # references cannot be resolved.
@@ -860,9 +875,34 @@ class UniversalModelGenerator:
         model_tables = []
         query_order = []
         staged = []
+        # safe name -> its position in `staged`. Two source tables can sanitise
+        # to one name -- 'Sales Data' and 'Sales_Data' both become Sales_Data --
+        # and staging both wrote one Delta table while describing two, so the
+        # model carried the same table and the same measures twice. Fabric
+        # rejects the whole import at the first repeat: "Could not add Measure
+        # with the name 'Total AGE' because a Measure with the same name
+        # already exists". Locally the model builds without complaint, so this
+        # only ever appeared at publish.
+        position = {}
+
+        def stage(safe, columns, rows):
+            """Add one table, or fold it into the one already holding its name."""
+            if safe not in position:
+                position[safe] = len(staged)
+                staged.append((safe, columns, rows))
+                query_order.append(safe)
+                return
+            index = position[safe]
+            existing_safe, existing_columns, existing_rows = staged[index]
+            # A table with rows beats an empty one of the same name; otherwise
+            # the first description stands. Either way one name, one table.
+            if rows and not existing_rows:
+                staged[index] = (existing_safe, columns, rows)
+            self.engine_only_tables.append(
+                "`%s` was declared more than once under the name `%s`; the "
+                "migration staged it as a single table." % (safe, safe))
 
         for table in self.script_tables:
-            safe = safe_name(table.name)
             payload = self._embedded_for(table.name)
             if payload:
                 columns = list(payload["columns"])
@@ -872,16 +912,13 @@ class UniversalModelGenerator:
                 # import path, expressed as an empty Delta table.
                 _expr, _status, columns = build_partition_expression(table, self.resolver)
                 rows = []
-            query_order.append(safe)
-            staged.append((safe, columns, rows))
+            stage(safe_name(table.name), columns, rows)
 
         claimed = {str(t.name).lower() for t in self.script_tables}
         for name, payload in sorted(self.embedded_data.items()):
             if str(name).lower() in claimed:
                 continue
-            safe = safe_name(name)
-            query_order.append(safe)
-            staged.append((safe, list(payload["columns"]), payload["rows"]))
+            stage(safe_name(name), list(payload["columns"]), payload["rows"])
             self.engine_only_tables.append(
                 "`%s` (%s row(s), %d column(s))"
                 % (name, f"{len(payload['rows']):,}", len(payload["columns"])))
@@ -1263,14 +1300,66 @@ class UniversalModelGenerator:
                         "lineageTag": new_guid(),
                     })
 
+        # Names are settled against the whole model, not just this table: the
+        # first table to want a name keeps it, and a later one gets its own
+        # table's name appended rather than colliding.
+        #
+        # This table's own claims are released first. Its measures are being
+        # rebuilt from scratch, and without this a second pass over the same
+        # table would find every name taken -- by itself -- and qualify them
+        # all for no reason.
+        for key, owner in list(self.measure_names.items()):
+            if owner == safe:
+                del self.measure_names[key]
+
+        unique = {}
+        for name, measure in measures.items():
+            final = self._unique_measure_name(name, safe)
+            measure["name"] = final
+            unique[final] = measure
+
         # Recorded so visuals can only ever project a measure that exists. The
         # name is otherwise derived twice from the same Qlik expression -- once
         # here, once when a visual binds to it -- and the two derivations can
         # disagree, which Power BI reports as Missing_References on a report
         # that looks fine everywhere else.
-        self.built_measures.setdefault(safe, set()).update(measures)
+        self.built_measures.setdefault(safe, set()).update(unique)
 
-        return list(measures.values())
+        return list(unique.values())
+
+    def _unique_measure_name(self, name: str, safe: str) -> str:
+        """
+        `name` if no other table has claimed it, otherwise a qualified variant.
+
+        Qualifying with the owning table is what a reader would write by hand,
+        and it keeps the first table's measure on the name a visual already
+        binds to -- so a collision costs the *second* table a longer name and
+        costs the report nothing.
+        """
+        owner = self.measure_names.get(name.lower())
+        if owner is None:
+            self.measure_names[name.lower()] = safe
+            return name
+
+        # Two names on the *same* table can still collide here, because Power
+        # BI compares measure names without case and this model does not: a
+        # column named AGE and a translated expression named "Total Age" are
+        # two different keys locally and one name to Fabric. Numbering is the
+        # honest fix there -- qualifying with the table it already belongs to
+        # would say nothing.
+        def variant(index):
+            if owner == safe:
+                return "%s %d" % (name, index)
+            return ("%s (%s)" % (name, safe) if index == 2
+                    else "%s (%s %d)" % (name, safe, index))
+
+        index = 2
+        candidate = variant(index)
+        while candidate.lower() in self.measure_names:
+            index += 1
+            candidate = variant(index)
+        self.measure_names[candidate.lower()] = safe
+        return candidate
 
     def _rebind_columns(self, dax: str, measure_name: str, qlik_expr: str) -> str:
         """
@@ -1726,7 +1815,8 @@ class UniversalPBIPGenerator:
     def __init__(self, extraction_data: dict, output_dir: str, ai_brain: AIConverterBrain,
                  server: str = None, database: str = "postgres", mode: str = "offline",
                  embedded_data: dict = None, data_problems: dict = None,
-                 embed_budget_bytes: int = None, stage_dir: str = None):
+                 embed_budget_bytes: int = None, stage_dir: str = None,
+                 data_notes: list = None):
         self.data = extraction_data
         self.ai = ai_brain
         self.server = server
@@ -1750,6 +1840,7 @@ class UniversalPBIPGenerator:
             data_problems=data_problems,
             embed_budget_bytes=embed_budget_bytes,
             stage_dir=stage_dir,
+            data_notes=data_notes,
         )
         self.table_name = self.model_gen.table_name
 
@@ -2211,6 +2302,16 @@ b'</Types>'
                 lines.append("| %s | %s |" % (tname, flat.replace("|", "\\|")[:300]))
             lines.append("")
 
+        data_notes = list(dict.fromkeys(getattr(gen, "data_notes", None) or []))
+        if data_notes:
+            lines += [
+                "## Tables whose rows came from somewhere other than their source",
+                "",
+                "These tables carry rows, but not a full read of the table the model",
+                "names. Read this before treating their numbers as the source's own:",
+                "",
+            ] + ["- %s" % " ".join(str(n).split()) for n in data_notes] + [""]
+
         size_notes = list(dict.fromkeys(getattr(gen, "size_notes", None) or []))
         if size_notes:
             lines += [
@@ -2608,13 +2709,14 @@ def main():
     output_dir = args.output if args.output else f"{clean_title}_AI_PowerBI"
 
     # 4. Read the app's real rows, when this run came from a live tenant.
-    embedded_data, data_problems = _read_live_data(args, extraction_data)
+    embedded_data, data_problems, data_notes = _read_live_data(args, extraction_data)
 
     # 5. Generate Universal PBIP Project
     generator = UniversalPBIPGenerator(
         extraction_data, output_dir, ai_brain,
         server=args.server, database=args.database, mode=args.mode,
         embedded_data=embedded_data, data_problems=data_problems,
+        data_notes=data_notes,
         embed_budget_bytes=int(args.max_embedded_mb * 1024 * 1024),
         stage_dir=os.path.join(output_dir, "lakehouse") if args.stage_lakehouse else None,
     )
@@ -2643,12 +2745,23 @@ def _warn_if_no_rows(total, problems):
 
 
 def _read_tableau_data(args, extraction_data):
-    """Read rows out of the workbook's own extract.
+    """Read a Tableau workbook's rows, from whichever source actually has them.
 
-    Unlike the Qlik path there is nothing to connect to: a .twbx bundles its
-    extract, so the rows are already local. Failure is never fatal — the
-    migration continues with structure only, and the reason is recorded for the
-    audit report.
+    Three places, in descending fidelity, because a workbook keeps its data in
+    exactly one of them:
+
+    1. The bundled extract. A .twbx with an extract carries every row locally.
+    2. The live source. A workbook on a live connection packages no rows at
+       all -- they never leave the database -- so the database is asked
+       directly, with a credential supplied for this run. This is the full
+       table, exactly as the extract would have been.
+    3. Tableau itself. Failing both, Tableau will run the query with the
+       credential *it* holds and return what a worksheet shows. That is the
+       sheet's data, not the table's, so it is recorded as such rather than
+       presented as a complete read.
+
+    Failure is never fatal at any tier — the migration continues with structure
+    only, and the reason is recorded for the audit report.
     """
     tables = (extraction_data.get("data_model") or {}).get("tables") or []
     table_names = [t.get("name") for t in tables if t.get("name")]
@@ -2673,13 +2786,27 @@ def _read_tableau_data(args, extraction_data):
         )
     except Exception as err:            # noqa: BLE001 - reported, never fatal
         print(f"  [WARN] Could not read the workbook's extract: {err}")
-        return {}, {"(all tables)": str(err)}
+        data, problems = {}, {"(all tables)": str(err)}
+
+    notes = []
+    unread = [t for t in tables if t.get("name") and t["name"] not in data]
+    if unread:
+        recovered, recovered_problems = _read_tableau_source(unread, max_rows)
+        data.update(recovered)
+        problems.update(recovered_problems)
+        for name in recovered:
+            problems.pop(name, None)
+
+    unread = [t for t in tables if t.get("name") and t["name"] not in data]
+    if unread:
+        recovered, recovered_problems, view_notes = _read_tableau_views(unread, max_rows)
+        data.update(recovered)
+        problems.update(recovered_problems)
+        for name in recovered:
+            problems.pop(name, None)
+        notes.extend(view_notes)
 
     total = sum(len(d["rows"]) for d in data.values())
-    print(f"  [OK] Read {total:,} row(s) across {len(data)} table(s); "
-          f"{len(problems)} table(s) could not be read. "
-          f"The audit report states what was finally embedded.")
-
     # A migration that reads nothing produces a model with the right schema and
     # no data, no Lakehouse and empty visuals. That is a legitimate outcome for
     # a live-connection workbook and a broken install alike, and the two look
@@ -2687,7 +2814,77 @@ def _read_tableau_data(args, extraction_data):
     # rather than only in the audit report nobody opens until later.
     _warn_if_no_rows(total, problems)
 
-    return data, problems
+    return data, problems, notes
+
+
+def _read_tableau_source(tables, max_rows):
+    """Tier 2: read the live database the workbook connects to.
+
+    Only reached when the workbook packages no rows for these tables. The
+    credential comes from the environment rather than argv, which would expose
+    it in the process list -- and it has to be supplied at all because Tableau
+    never hands back an embedded database password: it is stored server-side,
+    encrypted, and stripped from the workbook XML on export.
+    """
+    live = [t for t in tables if (t.get("connection") or {}).get("class")]
+    if not live:
+        return {}, {}
+
+    try:
+        import snowflake_reader
+    except ImportError as err:          # noqa: BLE001 - reported, never fatal
+        print(f"  [WARN] Could not load the live-source reader: {err}")
+        return {}, {}
+
+    credentials = snowflake_reader.credentials_from_environment()
+    if not credentials:
+        classes = sorted({(t.get("connection") or {}).get("class", "") for t in live})
+        print("  [INFO] %d table(s) are on a live %s connection and the workbook "
+              "carries none of their rows. No database credential was supplied "
+              "for this run, so Tableau itself is asked next."
+              % (len(live), "/".join(c for c in classes if c) or "database"))
+        return {}, {}
+
+    print("\n  Reading %d table(s) from the live source the workbook connects to..."
+          % len(live))
+    try:
+        return snowflake_reader.read_tables(
+            live, credentials, max_rows=max_rows,
+            note=lambda text: print("  " + text),
+        )
+    except Exception as err:            # noqa: BLE001 - reported, never fatal
+        print(f"  [WARN] Could not read the live source: {err}")
+        return {}, {t["name"]: str(err) for t in live}
+
+
+def _read_tableau_views(tables, max_rows):
+    """Tier 3: let Tableau run the query and return what a worksheet shows.
+
+    Returns (data, problems, notes). The notes are not decoration: rows from a
+    worksheet are that sheet's fields at that sheet's aggregation, and the
+    audit report has to say so for every table filled this way.
+    """
+    server = os.environ.get("TABLEAU_SERVER_URL", "").strip()
+    workbook_id = os.environ.get("TABLEAU_WORKBOOK_ID", "").strip()
+    pat_name = os.environ.get("TABLEAU_PAT_NAME", "").strip()
+    pat_secret = os.environ.get("TABLEAU_PAT_SECRET", "")
+    if not (server and workbook_id and pat_name and pat_secret):
+        # A .twbx migrated from a local file has no Tableau session behind it,
+        # which is not a failure -- there is simply no third tier to try.
+        return {}, {}, []
+
+    print("\n  Asking Tableau for %d table(s) it can still serve..." % len(tables))
+    try:
+        import tableau_view_data
+        return tableau_view_data.read_view_tables(
+            server, os.environ.get("TABLEAU_SITE", "").strip(),
+            pat_name, pat_secret, workbook_id, tables, max_rows=max_rows,
+            note=lambda text: print("  " + text),
+        )
+    except Exception as err:            # noqa: BLE001 - reported, never fatal
+        print(f"  [WARN] Could not read the workbook's view data: {err}")
+        return {}, {}, []
+>>>>>>> e9c2cbc (feat: add snowflake reader and tableau view data extraction support)
 
 
 def _read_live_data(args, extraction_data):
@@ -2708,13 +2905,13 @@ def _read_live_data(args, extraction_data):
         return _read_tableau_data(args, extraction_data)
 
     if not (args.qlik_tenant and args.qlik_app_id):
-        return {}, {}
+        return {}, {}, []
 
     authorization = os.environ.get("QLIK_AUTHORIZATION") or os.environ.get("QLIK_API_KEY")
     if not authorization:
         print("  [WARN] --qlik-tenant was given but neither QLIK_AUTHORIZATION nor "
               "QLIK_API_KEY is set; no data will be read.")
-        return {}, {"(all tables)": "No Qlik credential was available to this process."}
+        return {}, {"(all tables)": "No Qlik credential was available to this process."}, []
     if not authorization.lower().startswith("bearer "):
         authorization = "Bearer %s" % authorization
 
@@ -2743,17 +2940,16 @@ def _read_live_data(args, extraction_data):
         )
     except Exception as err:            # noqa: BLE001 - reported, never fatal
         print(f"  [WARN] Could not read data from the tenant: {err}")
-        return {}, {"(all tables)": str(err)}
+        return {}, {"(all tables)": str(err)}, []
 
     total = sum(len(d["rows"]) for d in data.values())
     # "Read", not "embedded": the size budget is applied later, during model
     # generation, and may still trim a table. Claiming a row count here that a
-    # later step reduces would overstate what actually reached Fabric.
     print(f"  [OK] Read {total:,} row(s) across {len(data)} table(s); "
           f"{len(problems)} table(s) could not be read. "
           f"The audit report states what was finally embedded.")
     _warn_if_no_rows(total, problems)
-    return data, problems
+    return data, problems, []
 
 
 if __name__ == "__main__":

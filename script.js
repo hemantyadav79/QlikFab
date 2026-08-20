@@ -3999,20 +3999,37 @@ ${(appData.gaps && appData.gaps.length)
         }
     }
 
+    // Credentials for the database a live workbook connects to. Read at run
+    // time rather than at connect time: they are optional, and a workbook with
+    // an extract never needs them. Sent in the body with everything else, so
+    // they stay out of logs, history and Referer headers.
+    function snowflakeCredentials() {
+        const value = (id) => {
+            const input = document.getElementById(id);
+            return input ? input.value.trim() : "";
+        };
+        return {
+            snowflakeUser: value("snowflake-user"),
+            snowflakePassword: value("snowflake-password"),
+            snowflakeWarehouse: value("snowflake-warehouse"),
+            snowflakeRole: value("snowflake-role")
+        };
+    }
+
     async function runEngineOnTableauWorkbook(app, onLine) {
         let started;
         try {
             started = await fetch("/api/runs/from-tableau", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
+                body: JSON.stringify(Object.assign({
                     serverUrl: tableauConnection.serverUrl,
                     site: tableauConnection.site,
                     patName: tableauConnection.patName,
                     patSecret: tableauConnection.patSecret,
                     workbookId: app.appId,
                     name: app.name
-                })
+                }, snowflakeCredentials()))
             });
         } catch (err) {
             throw new Error(ENGINE_UNREACHABLE);

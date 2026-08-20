@@ -63,6 +63,16 @@ _DATE_PARTS = {
     "mdy", "my", "md", "week", "weekday", "quarter", "month", "year", "day",
 }
 
+# Tableau's own shelf controls. They occupy a field slot but name no column:
+# 'Measure Names'/'Measure Values' are how Tableau pivots several measures onto
+# one axis, and Power BI expresses that by projecting the measures themselves.
+# Carried through as fields they would bind a visual to a column the model has
+# no way to contain.
+_PSEUDO_FIELDS = {
+    ":measure names", "measure names", "measure values",
+    ":measure values", "multiple values",
+}
+
 
 def _strip_brackets(value):
     """`[Orders]` -> `Orders`. Tableau brackets nearly every identifier."""
@@ -100,10 +110,19 @@ class TableauExtractor:
         # local-name -> caption, so a shelf reference like [Calculation_123]
         # can be reported under the name a user would recognise.
         self._caption_by_name = {}
+        # The subset of the above that are calculated fields. A calculated field
+        # reaches the model under its caption rather than its internal name, so
+        # a shelf reference to one has to be rewritten before it can bind.
+        self._calculated_captions = {}
         # worksheet name -> parsed chart, so a dashboard zone can find it.
         self._charts_by_worksheet = {}
         # (table, remote column) -> the local name that column ended up with.
         self._local_by_remote = {}
+        # named-connection id -> where that connection actually points. A
+        # workbook on a live connection packages no rows, so this is the only
+        # record of where its data is; without it such a migration can only
+        # ever produce an empty model.
+        self._connections = {}
 
     # ------------------------------------------------------------------
     # Loading
@@ -161,6 +180,39 @@ class TableauExtractor:
     # ------------------------------------------------------------------
     # Data model
     # ------------------------------------------------------------------
+
+    def _collect_connections(self, datasource):
+        """Records where each named connection points.
+
+        A live-connection workbook carries no data at all -- the rows stay in
+        the database -- so these attributes are the whole of what is known
+        about them: class ('snowflake', 'redshift', ...), server, database,
+        schema, warehouse and the user Tableau signs in as. The password is
+        not among them and never is: Tableau strips embedded credentials on
+        export, which is why reading such a workbook's data needs a credential
+        of its own rather than one recovered from the file.
+        """
+        for named in datasource.findall(".//named-connection"):
+            inner = named.find("connection")
+            if inner is None:
+                continue
+            identifier = named.get("name") or ""
+            if not identifier:
+                continue
+            self._connections[identifier] = {
+                "id": identifier,
+                "caption": named.get("caption") or "",
+                "class": (inner.get("class") or "").strip().lower(),
+                "server": (inner.get("server") or "").strip(),
+                "port": (inner.get("port") or "").strip(),
+                "database": (inner.get("dbname") or "").strip(),
+                "schema": (inner.get("schema") or "").strip(),
+                "warehouse": (inner.get("warehouse") or "").strip(),
+                "role": (inner.get("role") or "").strip(),
+                "username": (inner.get("username") or "").strip(),
+                "authentication": (inner.get("authentication") or "").strip(),
+                "service": (inner.get("service") or "").strip(),
+            }
 
     def _collect_relations(self, node, datasource_name, found):
         """Walks the <relation> tree, collecting physical tables and joins.
@@ -270,6 +322,7 @@ class TableauExtractor:
 
         relations = {}
         if connection is not None:
+            self._collect_connections(datasource)
             self._collect_relations(connection, caption, relations)
 
         # Columns, grouped by the table the workbook says they belong to. The
@@ -334,6 +387,7 @@ class TableauExtractor:
                     "translated." % (column_caption, caption))
                 continue
 
+            self._calculated_captions[local_name] = column_caption
             self.calculations.append({
                 "name": column_caption,
                 "internal_name": local_name,
@@ -352,6 +406,9 @@ class TableauExtractor:
                 "origin": meta.get("table") or table_name,
                 "origin_kind": "extract" if meta.get("kind") == "table" else meta.get("kind", "unknown"),
                 "datasource": caption,
+                # Where the rows really are. Carried through so a workbook with
+                # no extract can still be read from its source.
+                "connection": self._connections.get(meta.get("connection") or "", {}),
             })
 
         # Columns whose parent table was never declared as a relation — a
@@ -417,17 +474,29 @@ class TableauExtractor:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _shelf_tokens(text):
-        """Every column-instance token in a shelf or encoding reference.
+    def _shelf_references(text):
+        """Every field reference on a shelf or encoding, as its own token.
 
-        A shelf reads `[federated.abc].[sum:Sales:qk]`, but the datasource half
-        is optional -- plenty of workbooks write the instance on its own -- and
-        a single shelf can carry several. Instances are picked out by their
-        `aggregation:field:type` shape rather than by position, so both forms
-        are read and the datasource token is never mistaken for a field.
+        A shelf holds `/`-separated references, each either `[datasource].[field]`
+        or a bare `[field]`, and the field is always the last bracketed group of
+        its own reference. Splitting on the separator and taking that last group
+        is what keeps the datasource token from being mistaken for a field,
+        without having to recognise datasource naming conventions.
+
+        The previous rule -- keep only tokens containing a colon -- worked for an
+        aggregated field, which Tableau writes as a column instance
+        (`[sum:Sales:qk]`), but silently discarded every unaggregated dimension,
+        which it writes as the bare column (`[Region]`) with no colon anywhere.
+        A bar chart of Sales by Region therefore arrived carrying its measure and
+        no category at all, and a worksheet whose shelves held only dimensions
+        arrived empty and was dropped as a visual with nothing to project.
         """
-        return [token for token in re.findall(r"\[([^\[\]]+)\]", text or "")
-                if ":" in token]
+        references = []
+        for segment in re.split(r"[/+]", text or ""):
+            groups = re.findall(r"\[([^\[\]]+)\]", segment)
+            if groups:
+                references.append(groups[-1])
+        return references
 
     def _worksheet_dependencies(self, view):
         """What the worksheet says it uses, from <datasource-dependencies>.
@@ -468,21 +537,34 @@ class TableauExtractor:
                 })
         return dependencies
 
+    def _field_names(self, field):
+        """(binding name, display name) for the field half of a shelf token.
+
+        These are not always the same string, and using one where the other
+        belongs is how a visual ends up bound to a column that does not exist.
+        A physical column reaches the model under the name the connection
+        reported, so a projection must bind to *that*, while the caption is only
+        what the workbook chose to display. A calculated field is the other way
+        round: nothing physical stands behind it, and the model builds it under
+        its caption, so `Calculation_1697` is the wrong thing to bind to.
+        """
+        if field in self._calculated_captions:
+            caption = self._calculated_captions[field]
+            return caption, caption
+        return field, self._caption_by_name.get(field, field)
+
     def _parse_shelf_reference(self, reference):
-        """Reads one shelf entry into (field_name, aggregation, is_measure).
+        """Reads one shelf entry into its field, aggregation and role.
 
         A reference looks like `[datasource].[sum:Sales:qk]`, or just
-        `[sum:Sales:qk]`. The instance segment carries the aggregation, the
-        field, and a type suffix.
+        `[sum:Sales:qk]`, or -- for an unaggregated dimension -- plain
+        `[datasource].[Region]`. The instance form carries the aggregation, the
+        field, and a type suffix; the bare form carries only the field.
         """
-        tokens = self._shelf_tokens(reference)
-        if tokens:
-            token = tokens[-1]
-        else:
-            parts = re.findall(r"\[([^\[\]]+)\]", reference or "")
-            if not parts:
-                return None
-            token = parts[-1]
+        references = self._shelf_references(reference)
+        if not references:
+            return None
+        token = references[-1]
 
         segments = token.split(":")
         if len(segments) >= 3:
@@ -493,15 +575,22 @@ class TableauExtractor:
             prefix, field = "", token
 
         field = _strip_brackets(field)
-        # An internal name like Calculation_123 means nothing to a user; the
-        # caption is what the worksheet actually displays.
-        display = self._caption_by_name.get(field, field)
+        if not field or field.lower() in _PSEUDO_FIELDS:
+            # 'Measure Names'/'Measure Values' are Tableau's own pivot controls,
+            # not columns. Binding a visual to them would project a field the
+            # model does not contain.
+            return None
+
+        binding, display = self._field_names(field)
 
         if prefix in _AGGREGATIONS:
-            return {"name": display, "aggregation": prefix, "is_measure": True}
+            return {"name": binding, "label": display,
+                    "aggregation": prefix, "is_measure": True}
         if prefix in _DATE_PARTS:
-            return {"name": display, "aggregation": prefix, "is_measure": False}
-        return {"name": display, "aggregation": prefix or "none", "is_measure": False}
+            return {"name": binding, "label": display,
+                    "aggregation": prefix, "is_measure": False}
+        return {"name": binding, "label": display,
+                "aggregation": prefix or "none", "is_measure": False}
 
     def _parse_worksheet(self, worksheet):
         name = worksheet.get("name", "")
@@ -522,39 +611,66 @@ class TableauExtractor:
 
         dimensions, measures = [], []
 
-        def add_measure(name, aggregation, encoding=""):
+        def add_measure(name, aggregation, label=None, encoding=""):
             if any(item["name"] == name for item in measures):
                 return
             entry = {
                 "name": name,
                 # The engine's measure builder reads `expression`; the
-                # aggregation Tableau stated is what it means.
+                # aggregation Tableau stated is what it means. The binding name
+                # goes in the expression, not the caption, because the DAX
+                # translator resolves the bracketed token against the model's
+                # real columns.
                 "expression": "%s([%s])" % ((aggregation or "sum").upper(), name),
-                "label": name,
+                "label": label or name,
                 "aggregation": aggregation or "sum",
             }
             if encoding:
                 entry["encoding"] = encoding
             measures.append(entry)
 
-        def add_dimension(name, encoding=""):
+        def add_dimension(name, label=None, encoding=""):
             if any(item["name"] == name for item in dimensions):
                 return
-            entry = {"name": name, "field": name, "label": name}
+            entry = {"name": name, "field": name, "label": label or name}
             if encoding:
                 entry["encoding"] = encoding
             dimensions.append(entry)
 
+        # What the worksheet declares it uses, read up front so a shelf
+        # reference that states no aggregation can be resolved against the role
+        # the worksheet itself gave the column, rather than being assumed a
+        # dimension because it merely looks like one.
+        view = table.find("view")
+        dependencies = self._worksheet_dependencies(view) if view is not None else {}
+
+        def place(token, encoding=""):
+            parsed = self._parse_shelf_reference("[%s]" % token)
+            if not parsed:
+                return
+            declared = dependencies.get(token) or {}
+            role = declared.get("role", "")
+            derivation = declared.get("derivation", "")
+
+            # A bare reference carries no aggregation, so its role is not stated
+            # in the token itself. The worksheet's own declaration is the
+            # authority; without it the reference stays a dimension, which is
+            # what an unaggregated shelf entry almost always is.
+            if parsed["aggregation"] == "none" and role == "measure":
+                add_measure(parsed["name"],
+                            derivation if derivation in _AGGREGATIONS else "sum",
+                            parsed["label"], encoding)
+                return
+
+            if parsed["is_measure"]:
+                add_measure(parsed["name"], parsed["aggregation"],
+                            parsed["label"], encoding)
+            else:
+                add_dimension(parsed["name"], parsed["label"], encoding)
+
         for shelf in ("rows", "cols"):
-            text = table.findtext(shelf, "") or ""
-            for token in self._shelf_tokens(text):
-                parsed = self._parse_shelf_reference("[%s]" % token)
-                if not parsed:
-                    continue
-                if parsed["is_measure"]:
-                    add_measure(parsed["name"], parsed["aggregation"])
-                else:
-                    add_dimension(parsed["name"])
+            for token in self._shelf_references(table.findtext(shelf, "") or ""):
+                place(token)
 
         # Encodings (colour, size, label, detail, text) carry further fields.
         # For a pie, treemap, map or text table these are the *only* fields --
@@ -563,40 +679,31 @@ class TableauExtractor:
             column = encoding.get("column")
             if not column:
                 continue
-            parsed = self._parse_shelf_reference(column)
-            if not parsed:
-                continue
-            if parsed["is_measure"]:
-                add_measure(parsed["name"], parsed["aggregation"], encoding.tag)
-            else:
-                add_dimension(parsed["name"], encoding.tag)
+            for token in self._shelf_references(column):
+                place(token, encoding.tag)
 
         # Fallback: what the worksheet declares it depends on. Reached when the
         # shelves and Marks card between them named nothing this parser
         # recognised -- a worksheet built entirely from column-instances the
         # shelf syntax does not spell out, which would otherwise reach the
         # engine with no fields at all and be dropped as an empty visual.
-        view = table.find("view")
-        if not dimensions and not measures and view is not None:
-            for instance, info in self._worksheet_dependencies(view).items():
-                display = self._caption_by_name.get(info["column"]) or info["caption"] or info["column"]
-                if not display:
+        if not dimensions and not measures and dependencies:
+            for instance, info in dependencies.items():
+                column = info["column"]
+                if not column or column.lower() in _PSEUDO_FIELDS:
                     continue
+                binding, display = self._field_names(column)
                 derivation = info["derivation"]
                 if info["role"] == "measure" or derivation in _AGGREGATIONS:
-                    add_measure(display, derivation if derivation in _AGGREGATIONS else "sum")
+                    add_measure(binding,
+                                derivation if derivation in _AGGREGATIONS else "sum",
+                                display)
                 elif info["role"] == "dimension":
-                    add_dimension(display)
+                    add_dimension(binding, display)
                 else:
                     # Role unstated: read it off the instance's own prefix
                     # rather than assuming one.
-                    parsed = self._parse_shelf_reference("[%s]" % instance)
-                    if not parsed:
-                        continue
-                    if parsed["is_measure"]:
-                        add_measure(parsed["name"], parsed["aggregation"])
-                    else:
-                        add_dimension(parsed["name"])
+                    place(instance)
 
         if not dimensions and not measures:
             # Recorded rather than passed on silently: the engine drops a visual

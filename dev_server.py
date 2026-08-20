@@ -71,6 +71,41 @@ def stale_modules():
     return stale
 
 
+# Optional credentials for the database a live Tableau workbook connects to.
+# A workbook without an extract packages no rows -- they stay in the database --
+# and Tableau will not return the password it holds for that connection: it is
+# stored server-side, encrypted, and stripped from the workbook XML on export.
+# Supplying one here is what lets such a workbook migrate with its data; without
+# it the run falls back to asking Tableau for the worksheet's data instead.
+#
+# Passed to the engine by environment, never argv, and never stored: the run
+# holds them only for as long as it takes to start the subprocess.
+_SOURCE_CREDENTIAL_FIELDS = {
+    "snowflakeUser": "SNOWFLAKE_USER",
+    "snowflakePassword": "SNOWFLAKE_PASSWORD",
+    "snowflakeAccount": "SNOWFLAKE_ACCOUNT",
+    "snowflakeWarehouse": "SNOWFLAKE_WAREHOUSE",
+    "snowflakeRole": "SNOWFLAKE_ROLE",
+    "snowflakeDatabase": "SNOWFLAKE_DATABASE",
+    "snowflakeSchema": "SNOWFLAKE_SCHEMA",
+}
+
+
+def _source_credentials(payload):
+    """The live-source credential fields present in a run request, if any."""
+    found = {}
+    for field, variable in _SOURCE_CREDENTIAL_FIELDS.items():
+        value = str(payload.get(field) or "").strip()
+        if value:
+            found[variable] = value
+    # A user without a password authenticates nothing, and a password without a
+    # user cannot be used either. Both or neither, so a half-filled form fails
+    # here rather than as a login error three minutes into a run.
+    if not (found.get("SNOWFLAKE_USER") and found.get("SNOWFLAKE_PASSWORD")):
+        return {}
+    return found
+
+
 def _warn_if_stale(run):
     """Puts the warning in the run's own log, where it will actually be read."""
     stale = stale_modules()
@@ -522,7 +557,8 @@ class MigrationUIHandler(http.server.SimpleHTTPRequestHandler):
 
         run = engine_runner.STORE.create(name, payload=None, source_platform="tableau")
         _warn_if_stale(run)
-        run.start_from_tableau(server_url, pat_name, pat_secret, site, workbook_id)
+        run.start_from_tableau(server_url, pat_name, pat_secret, site, workbook_id,
+                               source_credentials=_source_credentials(payload))
         self.send_json(202, run.snapshot())
 
     def handle_fabric_token(self):
