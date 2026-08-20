@@ -690,10 +690,10 @@ if __name__ == "__main__":
         print("Cleanup          removed %d abandoned work dir(s), freed %s"
               % (swept, engine_runner.human_bytes(freed)))
 
-    with ReusableServer(("localhost", PORT), MigrationUIHandler) as httpd:
-        print("Migration UI on  http://localhost:%d" % PORT)
-        print("Qlik proxy at    http://localhost:%d%s?target=<tenant url>" % (PORT, PROXY_PATH))
-        print("Fabric proxy at  http://localhost:%d%s?target=<fabric url>" % (PORT, FABRIC_PROXY_PATH))
+    with ReusableServer(("0.0.0.0", PORT), MigrationUIHandler) as httpd:
+        print("Migration UI on  http://0.0.0.0:%d" % PORT)
+        print("Qlik proxy at    http://0.0.0.0:%d%s?target=<tenant url>" % (PORT, PROXY_PATH))
+        print("Fabric proxy at  http://0.0.0.0:%d%s?target=<fabric url>" % (PORT, FABRIC_PROXY_PATH))
         print("Fabric token at  http://localhost:%d%s (POST)" % (PORT, FABRIC_TOKEN_PATH))
         print("Engine runs at   http://localhost:%d%s (POST a .qvf)" % (PORT, RUNS_PATH))
         print("Engine script    %s" % engine_runner.ENGINE_SCRIPT)
