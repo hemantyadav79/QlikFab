@@ -2884,7 +2884,6 @@ def _read_tableau_views(tables, max_rows):
     except Exception as err:            # noqa: BLE001 - reported, never fatal
         print(f"  [WARN] Could not read the workbook's view data: {err}")
         return {}, {}, []
->>>>>>> e9c2cbc (feat: add snowflake reader and tableau view data extraction support)
 
 
 def _read_live_data(args, extraction_data):
