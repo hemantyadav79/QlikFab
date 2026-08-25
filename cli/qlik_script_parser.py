@@ -15,7 +15,20 @@ records what it saw and leaves resolution to the caller.
 """
 
 import re
-from dataclasses import dataclass, field as dc_field
+
+# The table/field/origin structures live in source_model now: a Tableau workbook
+# describes the same three things, so they are shared rather than duplicated.
+# Re-exported under their original names because this module has always been
+# where the rest of the engine imports them from.
+from source_model import (            # noqa: F401  (re-export)
+    QlikField,
+    QlikSource,
+    QlikTable,
+    SourceField,
+    SourceRelation,
+    SourceTable,
+    TableOrigin,
+)
 
 # Statements that are control flow / configuration rather than table loads.
 _NON_LOAD_PREFIXES = (
@@ -54,50 +67,6 @@ _EXT_KINDS = {
     ".json": "json",
     ".parquet": "parquet",
 }
-
-
-@dataclass
-class QlikSource:
-    """Where a table's rows come from."""
-
-    kind: str = "unknown"          # qvd | delimited | excel | inline | resident | sql | unknown
-    raw: str = ""                  # the FROM clause exactly as written
-    path: str = ""                 # resolved path with $(vars) substituted
-    connection: str = ""           # lib:// connection name, if any
-    relative_path: str = ""        # path beneath the lib:// connection
-    options: dict = dc_field(default_factory=dict)
-    resident_table: str = ""
-    inline_text: str = ""
-
-    @property
-    def is_file(self) -> bool:
-        return self.kind in ("qvd", "delimited", "excel", "xml", "json", "parquet")
-
-
-@dataclass
-class QlikField:
-    """A single field produced by a LOAD statement."""
-
-    name: str                      # the name the field has after loading (alias wins)
-    expression: str = ""           # what appeared before AS, verbatim
-    is_derived: bool = False       # True when expression is not a bare column reference
-    tags: list = dc_field(default_factory=list)   # from an inline Tagged (...) clause
-
-
-@dataclass
-class QlikTable:
-    """A table produced by one LOAD statement."""
-
-    name: str
-    fields: list = dc_field(default_factory=list)
-    source: QlikSource = dc_field(default_factory=QlikSource)
-    is_mapping: bool = False
-    is_hidden: bool = False        # leading-underscore helper tables
-    statement: str = ""
-
-    @property
-    def field_names(self) -> list:
-        return [f.name for f in self.fields]
 
 
 # ----------------------------------------------------------------------

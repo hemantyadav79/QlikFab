@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Qlik → Fabric | Autonomous Migration Platform</title>
+    <title>Qlik / Tableau → Fabric | Autonomous Migration Platform</title>
     <meta name="color-scheme" content="light dark">
 
     <!--
@@ -25,53 +25,82 @@
         })();
     </script>
 
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=5">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
     <div class="app-container">
+        <!-- SIDEBAR OVERLAY FOR MOBILE -->
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
         <!-- SIDEBAR NAVIGATION -->
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="logo-icon"><i class="fa-solid fa-bolt-lightning"></i></div>
-                <div class="logo-text">Qlik <span>→</span> Fabric</div>
+                <div class="logo-text">Qlik / Tableau <span>→</span> Fabric</div>
             </div>
             <div class="nav-section-title">Navigate</div>
             <nav class="nav-menu">
-                <a href="#run-migration" class="nav-item active" data-tab="tab-run"><i class="fa-solid fa-rocket"></i> Run migration</a>
-                <a href="#assessment" class="nav-item" data-tab="tab-assessment"><i class="fa-solid fa-chart-line"></i> Assessment</a>
-                <a href="#review-queue" class="nav-item" data-tab="tab-review"><i class="fa-solid fa-check-double"></i> Review queue</a>
-                <a href="#artifacts" class="nav-item" data-tab="tab-artifacts"><i class="fa-solid fa-box-open"></i> Artifacts</a>
-                <a href="#job-history" class="nav-item" data-tab="tab-history"><i class="fa-solid fa-clock-rotate-left"></i> Job history</a>
-                <a href="#settings" class="nav-item" data-tab="tab-settings"><i class="fa-solid fa-gear"></i> Settings</a>
-            </nav>
+                <a href="#run-migration" class="nav-item active" data-tab="tab-run">Run migration</a>
 
-            <div class="sidebar-footer">
-                <div class="autogen-badge">
-                    <div class="badge-icon"><i class="fa-solid fa-robot"></i></div>
-                    <div class="badge-content">
-                        <div class="badge-title">Microsoft AutoGen</div>
-                        <div class="badge-desc">4 AssistantAgents Active</div>
+                <!--
+                  Agents is a group, not a leaf: opening it reveals one sub-item per
+                  engine phase. The sub-items drive the panes inside #tab-agents.
+                -->
+                <div class="nav-group" id="nav-group-agents">
+                    <a href="#agents" class="nav-item nav-item-parent" data-tab="tab-agents"
+                       aria-expanded="false" aria-controls="nav-submenu-agents">
+                        <span class="nav-item-label">Agents</span>
+                        <i class="fa-solid fa-chevron-down nav-caret" aria-hidden="true"></i>
+                    </a>
+                    <div class="nav-submenu" id="nav-submenu-agents" role="tablist">
+                        <a href="#agent-assessment" class="nav-subitem" data-subtab="sub-agent-assess" role="tab" aria-selected="false">
+                            <span class="nav-subdot" style="background: #3b82f6;"></span>
+                            <span class="nav-subitem-label">Assessment</span>
+                            <span class="nav-agent-state" id="nav-state-assess">idle</span>
+                        </a>
+                        <a href="#agent-parsing" class="nav-subitem" data-subtab="sub-agent-parse" role="tab" aria-selected="false">
+                            <span class="nav-subdot" style="background: #06b6d4;"></span>
+                            <span class="nav-subitem-label">Parsing</span>
+                            <span class="nav-agent-state" id="nav-state-parse">idle</span>
+                        </a>
+                        <a href="#agent-mapping" class="nav-subitem" data-subtab="sub-agent-map" role="tab" aria-selected="false">
+                            <span class="nav-subdot" style="background: #8b5cf6;"></span>
+                            <span class="nav-subitem-label">Mapping</span>
+                            <span class="nav-agent-state" id="nav-state-map">idle</span>
+                        </a>
+                        <a href="#agent-report-generation" class="nav-subitem" data-subtab="sub-agent-gen" role="tab" aria-selected="false">
+                            <span class="nav-subdot" style="background: #10b981;"></span>
+                            <span class="nav-subitem-label">Report Generation</span>
+                            <span class="nav-agent-state" id="nav-state-gen">idle</span>
+                        </a>
                     </div>
                 </div>
-            </div>
+
+                <a href="#logs" class="nav-item" data-tab="tab-logs">Logs</a>
+                <a href="#summary" class="nav-item" data-tab="tab-summary">Summary</a>
+                <a href="#job-history" class="nav-item" data-tab="tab-history">Migration history</a>
+            </nav>
         </aside>
 
         <!-- MAIN CONTENT AREA -->
         <main class="main-content">
             <!-- TOP HEADER -->
             <header class="top-header">
-                <div class="header-titles">
-                    <h1>Qlik <span>→</span> Fabric</h1>
-                    <p>Autonomous migration platform</p>
+                <div class="header-lead">
+                    <button type="button" class="sidebar-toggle" id="btn-sidebar-toggle" aria-label="Toggle menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
+                    <div class="header-titles">
+                        <h1>Qlik / Tableau <span>→</span> Fabric</h1>
+                        <p>Autonomous migration platform</p>
+                    </div>
                 </div>
                 <div class="header-actions">
-                    <div class="theme-toggle" role="group" aria-label="Colour theme">
+                    <div class="theme-toggle" role="group" aria-label="Theme switcher">
                         <span class="theme-toggle__thumb" aria-hidden="true"></span>
                         <button type="button" class="theme-toggle__option" data-theme-value="light"
                                 aria-pressed="true">
@@ -82,306 +111,778 @@
                             <i class="fa-solid fa-moon" aria-hidden="true"></i> Dark
                         </button>
                     </div>
-                    <button class="btn-deploy"><i class="fa-solid fa-cloud-arrow-up"></i> Deploy</button>
                 </div>
             </header>
 
 
             <!-- TAB 1: RUN MIGRATION (DEFAULT) -->
             <section id="tab-run" class="tab-pane active">
-                <div class="migration-grid">
-                    <!-- LEFT COLUMN: WORKS WITH NO QLIK CONNECTION -->
-                    <div class="migration-card primary-card">
-                        <h2>Works with no Qlik connection.</h2>
-                        
-                        <!-- HIDDEN FILE INPUT FOR BROWSE / UPLOAD FROM PC (UP TO 10 FILES AT ONCE) -->
-                        <input type="file" id="qvf-file-input" accept=".qvf" multiple style="display: none;">
-
-                        <!-- DROPZONE BOX CLICKABLE TO BROWSE FILES -->
-                        <div class="file-upload-box" id="dropzone" title="Click to browse & upload up to 10 .qvf files from your PC">
-                            <i class="fa-solid fa-file-arrow-up"></i>
-                            <div class="upload-label">
-                                <b id="dropzone-name">Helpdesk Management.qvf</b>
-                                <span id="dropzone-size">1.96 MB</span>
+                <!--
+                  Source on the left, destination on the right. The two connections are
+                  independent: neither side waits on the other, so both can be filled in
+                  and tested in any order. Failures are reported inside the card that
+                  owns them rather than in a modal.
+                -->
+                <div class="migration-grid" id="migration-grid">
+                    <!-- SOURCE: LIVE QLIK CLOUD REST CONNECTION -->
+                    <div class="migration-card secondary-card" id="mode-pane-qlik">
+                        <!--
+                          The source platform picker. Only the credential fields below
+                          swap: the status line, the content picker and the run bar are
+                          shared, because "sign in, list what is there, choose some of
+                          it" is the same job whichever platform answers.
+                        -->
+                        <div class="source-picker">
+                            <h2 id="source-card-title"><i class="fa-solid fa-cloud" id="source-card-icon"></i> Connect to Qlik Cloud</h2>
+                            <div class="form-group source-select-group">
+                                <label for="source-platform">Source platform</label>
+                                <select id="source-platform" class="custom-input">
+                                    <option value="qlik" selected>Qlik Cloud</option>
+                                    <option value="tableau">Tableau Server / Cloud</option>
+                                </select>
                             </div>
-                            <span class="remove-file" id="btn-browse-file" title="Browse & Upload up to 10 .QVF Files from your computer"><i class="fa-solid fa-folder-open"></i></span>
+                        </div>
+
+                        <!-- SOURCE FIELDS: QLIK -->
+                        <div id="source-fields-qlik">
+                            <div class="form-group">
+                                <label>Tenant URL</label>
+                                <input type="text" id="qlik-tenant-url" class="custom-input" placeholder="https://your-tenant.region.qlikcloud.com">
+                            </div>
+
+                            <div class="form-group">
+                                <label>API Key (Bearer Token)</label>
+                                <input type="password" id="qlik-api-key" class="custom-input" placeholder="eyJhbGciOiJIUzI1...">
+                            </div>
+
+                            <p class="form-hint">
+                                Create the key in the Qlik Management Console under <b>API keys</b>. Paste the
+                                token only — no <code>Bearer</code> prefix. Calls to your tenant are relayed by
+                                this app's own server, so no <b>Content Security Policy</b> entry is needed —
+                                but the page must be served by <code>python dev_server.py</code>, not opened
+                                from disk or served by a plain static file server.
+                            </p>
+                        </div>
+
+                        <!-- SOURCE FIELDS: TABLEAU -->
+                        <div id="source-fields-tableau" class="hidden">
+                            <div class="form-group">
+                                <label>Server URL</label>
+                                <input type="text" id="tableau-server-url" class="custom-input" placeholder="https://10ax.online.tableau.com" autocomplete="off">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Site (content URL)</label>
+                                <input type="text" id="tableau-site" class="custom-input" placeholder="Leave empty for the Default site" autocomplete="off">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Personal Access Token name</label>
+                                <input type="text" id="tableau-pat-name" class="custom-input" placeholder="migration-token" autocomplete="off">
+                            </div>
+
+                            <div class="form-group">
+                                <label>Personal Access Token secret</label>
+                                <input type="password" id="tableau-pat-secret" class="custom-input" placeholder="The secret shown when the token was created" autocomplete="off">
+                            </div>
+
+                            <details class="form-group" id="tableau-source-credentials">
+                                <summary>Live database credentials <span class="form-hint">— only for workbooks with no extract</span></summary>
+
+                                <p class="form-hint">
+                                    A workbook on a <b>live connection</b> packages no rows: they stay in the
+                                    database. Tableau will not hand back the password it holds for that
+                                    connection — it is stored server-side, encrypted, and stripped from the
+                                    workbook file on export — so the migration needs one of its own to read
+                                    the real table. Leave this empty and the run falls back to asking Tableau
+                                    for each worksheet's data, which is that sheet's fields at that sheet's
+                                    aggregation, not the table. Workbooks with an extract ignore this entirely.
+                                </p>
+
+                                <div class="form-group">
+                                    <label>Snowflake user</label>
+                                    <input type="text" id="snowflake-user" class="custom-input" placeholder="Leave empty to skip" autocomplete="off">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Snowflake password</label>
+                                    <input type="password" id="snowflake-password" class="custom-input" placeholder="Used for this run only" autocomplete="off">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Warehouse</label>
+                                    <input type="text" id="snowflake-warehouse" class="custom-input" placeholder="Leave empty to use the one the workbook names" autocomplete="off">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Role</label>
+                                    <input type="text" id="snowflake-role" class="custom-input" placeholder="Leave empty for the user's default role" autocomplete="off">
+                                </div>
+
+                                <p class="form-hint">
+                                    Account, database and schema are read from the workbook itself. The user
+                                    needs <code>SELECT</code> on the tables the workbook reads and access to a
+                                    warehouse. Nothing is stored: the values are handed to the migration
+                                    engine for this run and discarded with it.
+                                </p>
+                            </details>
+
+                            <p class="form-hint">
+                                Create the token under <b>My Account Settings &rarr; Personal Access Tokens</b>.
+                                The <b>site content URL</b> is the segment in the browser address bar after
+                                <code>/site/</code> — the Default site has none, so leave it empty. A token
+                                lapses after 15 consecutive days unused. Nothing is stored: the values are
+                                used for this session only, and are sent in the request body rather than the
+                                URL so they stay out of logs and history.
+                            </p>
+
+                            <p class="form-hint">
+                                <b>Tableau Cloud</b> works as-is. A <b>self-hosted Tableau Server</b> must be
+                                named by the operator in the <code>TABLEAU_ALLOWED_HOSTS</code> environment
+                                variable before this server will connect to it — its hostname could be
+                                anything, so it cannot be allowed automatically.
+                            </p>
+                        </div>
+
+                        <button id="btn-test-connection" class="btn-secondary-block">
+                            Test Connection
+                        </button>
+
+                        <!-- Whatever the last Qlik call reported, success or failure. -->
+                        <div class="conn-status hidden" id="qlik-status" role="status" aria-live="polite"></div>
+
+                        <div id="qlik-apps-container" class="form-group" style="display: none;">
+                            <!-- Wording is set per source platform by script.js. -->
+                            <label id="qlik-app-label">Select apps to migrate</label>
+                            <!--
+                              A collapsed dropdown rather than an inline list: a tenant can
+                              list hundreds of apps, and the card must not grow with the
+                              tenant. The panel holds a filter and a scrolling checkbox per
+                              app — a checkbox rather than a native <select multiple> so
+                              picking several needs no modifier key, and so the selection
+                              survives filtering. Each ticked app becomes its own PBIP
+                              project. Rows are injected by script.js.
+                            -->
+                            <div class="app-dropdown" id="app-dropdown">
+                                <button type="button" class="app-dropdown-trigger" id="app-dropdown-trigger"
+                                        aria-expanded="false" aria-controls="app-dropdown-panel"
+                                        aria-labelledby="qlik-app-label qlik-app-count">
+                                    <span class="select-count" id="qlik-app-count">No apps selected</span>
+                                    <i class="fa-solid fa-chevron-down app-dropdown-caret" aria-hidden="true"></i>
+                                </button>
+
+                                <div class="app-dropdown-panel hidden" id="app-dropdown-panel">
+                                    <div class="app-dropdown-search">
+                                        <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                                        <input type="search" id="app-search" class="app-search-input"
+                                               placeholder="Filter by app name or ID" autocomplete="off"
+                                               aria-label="Filter apps">
+                                    </div>
+
+                                    <div id="qlik-app-list" class="app-checklist" role="group" aria-label="Apps to migrate"></div>
+
+                                    <p class="app-dropdown-empty hidden" id="app-filter-empty">No app matches that filter.</p>
+
+                                    <div class="select-toolbar app-dropdown-foot">
+                                        <span class="select-count" id="app-filter-count"></span>
+                                        <span class="select-actions">
+                                            <button type="button" class="btn-link" id="btn-select-all-apps">Select all</button>
+                                            <button type="button" class="btn-link" id="btn-clear-apps">Clear</button>
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- DESTINATION: MICROSOFT FABRIC -->
+                    <div class="migration-card secondary-card" id="fabric-target-container">
+                        <h2><i class="fa-solid fa-bullseye"></i> Connect to Microsoft Fabric</h2>
+
+                        <p class="form-hint">
+                            Sign in with a <b>Microsoft Entra ID service principal</b> (app registration) that has
+                            access to your Fabric tenant. Its three values come from the Azure portal &rarr;
+                            <b>Microsoft Entra ID &rarr; App registrations &rarr; your app</b>.
+                        </p>
+
+                        <div class="form-group">
+                            <label>Tenant (Directory) ID</label>
+                            <input type="text" id="fabric-tenant-id" class="custom-input" placeholder="72f988bf-86f1-41af-91ab-2d7cd011db47" autocomplete="off">
                         </div>
 
                         <div class="form-group">
-                            <label>...or select a QVF application to migrate</label>
-                            <select id="bundled-select" class="custom-select">
-                                <option value="" selected>-- No file selected (Upload from folder or choose below) --</option>
-                                <option value="browse">📂 + Browse & Upload .QVF Files from your computer (up to 10)...</option>
-                                <option value="Executive Dashboard.qvf">Executive Dashboard.qvf (2.88 MB)</option>
-                                <option value="Helpdesk Management.qvf">Helpdesk Management.qvf (1.96 MB)</option>
-                                <option value="Superstore_Sales_Dashboard.qvf">Superstore_Sales_Dashboard.qvf (208.0 KB)</option>
-                                <option value="Demo 2.qvf">Demo 2.qvf (288.0 KB)</option>
-                                <option value="first_qlik_project.qvf">first_qlik_project.qvf (4.00 MB)</option>
+                            <label>Client (Application) ID</label>
+                            <input type="text" id="fabric-client-id" class="custom-input" placeholder="a1b2c3d4-e5f6-7890-abcd-ef1234567890" autocomplete="off">
+                        </div>
+
+                        <div class="form-group">
+                            <label>Client secret</label>
+                            <input type="password" id="fabric-client-secret" class="custom-input" placeholder="Client secret VALUE (not the Secret ID)" autocomplete="off">
+                        </div>
+
+                        <p class="form-hint">
+                            Copy the secret's <b>Value</b> from <b>Certificates &amp; secrets</b> — it is shown once, at
+                            creation. Two things must also be true in the tenant, or the call returns an empty list:
+                            a Fabric admin has enabled <b>Admin portal &rarr; Tenant settings &rarr; Service principals
+                            can use Fabric APIs</b> for a group the app belongs to, and the app has been added to each
+                            workspace as <b>Admin</b>, <b>Member</b> or <b>Contributor</b>. Nothing is stored — the
+                            values are used for this session only.
+                        </p>
+
+                        <button id="btn-test-fabric" class="btn-secondary-block">
+                            Test Fabric Connection
+                        </button>
+
+                        <!-- Whatever the last Fabric call reported, success or failure. -->
+                        <div class="conn-status hidden" id="fabric-status" role="status" aria-live="polite"></div>
+
+                        <div id="fabric-workspace-container" class="form-group" style="display: none;">
+                            <label>Select the workspace to migrate into</label>
+                            <select id="fabric-workspace-select" class="custom-input">
+                                <option value="">Select a workspace...</option>
                             </select>
                         </div>
 
-                        <div class="info-card-blue">
-                            <i class="fa-solid fa-circle-info"></i>
-                            <p>This file is read offline: script, sheets, charts, measures and the rows the app was last loaded with. Anything that cannot be read is reported, never guessed.</p>
+                        <div id="fabric-workspace-manual" class="form-group">
+                            <label>Workspace name or ID</label>
+                            <input type="text" id="fabric-workspace" class="custom-input" placeholder="Finance Analytics  —  or  a1b2c3d4-e5f6-...">
                         </div>
 
-                        <button id="btn-start-migration" class="btn-primary-block">
-                            Start migration
-                        </button>
-                    </div>
-
-                    <!-- RIGHT COLUMN: NEEDS TENANT URL & API KEY -->
-                    <div class="migration-card secondary-card">
-                        <h2>Needs a tenant URL and API key — see Settings.</h2>
-                        
-                        <div class="form-group">
-                            <label>App ID or app URL</label>
-                            <input type="text" class="custom-input" placeholder="a1b2c3d4-e5f6-... or paste the app URL">
-                        </div>
-
-                        <button class="btn-secondary-block">
-                            Migrate from Qlik
-                        </button>
-
-                        <div class="faq-accordion" id="faq-toggle">
-                            <div class="faq-header">
-                                <i class="fa-solid fa-chevron-right" id="faq-icon"></i>
-                                <span>Why is this better than uploading?</span>
+                        <div id="fabric-extra-fields">
+                            <div class="form-group">
+                                <label>Capacity ID (optional)</label>
+                                <input type="text" id="fabric-capacity" class="custom-input" placeholder="Filled in from the selected workspace">
                             </div>
-                            <div class="faq-body" id="faq-content">
-                                <ul>
-                                    <li><b>Live Master Items Sync:</b> Read variables, custom security rules, and metadata directly from Qlik Cloud/Enterprise REST APIs.</li>
-                                    <li><b>Continuous Fabric Updates:</b> Keeps Power BI Fabric semantic models refreshed without manual `.qvf` file downloads.</li>
-                                    <li><b>Automatic Lineage Tracking:</b> Records source Qlik app lineage tags into Fabric `.pbip` datasets.</li>
-                                </ul>
+
+                            <div class="form-group">
+                                <label>Item name prefix (optional)</label>
+                                <input type="text" id="fabric-prefix" class="custom-input" placeholder="Defaults to the Qlik app name">
                             </div>
+
+                            <p class="form-hint">
+                                Each migrated app is published into this workspace as a
+                                <b>semantic model</b> plus a <b>report</b>, and the destination is written into
+                                the audit report. The <b>.pbip</b> / <b>.pbit</b> stay downloadable from
+                                Migration history either way. Publishing needs a workspace picked from the
+                                list above — a hand-typed name has no id for the Fabric API to address.
+                            </p>
                         </div>
                     </div>
                 </div>
 
-                <div class="tab-footer-caption">
-                    Upload any .QVF file on the left, or migrate live from Qlik on the right.
-                </div>
-
-                <!-- AUTOGEN LIVE CONSOLE MODAL / PANEL -->
-                <div id="autogen-console" class="autogen-console-card hidden">
-                    <div class="console-header">
-                        <div class="console-title"><i class="fa-solid fa-robot"></i> Microsoft AutoGen 4-Phase Multi-Agent Execution</div>
-                        <div class="console-status" id="console-status-badge"><span class="pulse-dot"></span> RUNNING</div>
-                    </div>
-                    <div class="console-logs" id="console-logs-body"></div>
-                    <div class="console-metrics hidden" id="console-metrics-row">
-                        <div class="metric-card">
-                            <span>Sheets Converted</span>
-                            <b id="metric-sheets">2 Pages</b>
-                        </div>
-                        <div class="metric-card">
-                            <span>Visuals Mapped</span>
-                            <b id="metric-visuals">10 Charts</b>
-                        </div>
-                        <div class="metric-card">
-                            <span>DAX Measures</span>
-                            <b id="metric-dax">12 Auto-Mapped</b>
-                        </div>
-                        <div class="metric-card">
-                            <span>Discrepancy Check</span>
-                            <b class="success-text">&lt; 5% (PASSED)</b>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- TAB 2: ASSESSMENT -->
-            <section id="tab-assessment" class="tab-pane">
-                <h2>Phase 1: Assessment & Volumetrics Scorecard</h2>
-                <p class="tab-desc">Dynamic pre-migration analysis generated by AutoGen <code>AssessmentAgent</code> for <b id="assess-target-name">Helpdesk Management.qvf</b></p>
-                
-                <div class="kpi-row">
-                    <div class="kpi-box">
-                        <span class="kpi-label">Report App Name</span>
-                        <b class="kpi-value" id="kpi-app-name">Helpdesk Management</b>
-                        <span class="kpi-sub">Dynamic QVF Title</span>
-                    </div>
-                    <div class="kpi-box">
-                        <span class="kpi-label">Extracted Fields</span>
-                        <b class="kpi-value" id="kpi-fields-cnt">33 Columns</b>
-                        <span class="kpi-sub">100% Dynamic Schema</span>
-                    </div>
-                    <div class="kpi-box">
-                        <span class="kpi-label">Sheets & Visuals</span>
-                        <b class="kpi-value" id="kpi-visuals-cnt">2 Sheets / 10 Charts</b>
-                        <span class="kpi-sub">Parsed from Load Script</span>
-                    </div>
-                    <div class="kpi-box">
-                        <span class="kpi-label">PII Risk Detection</span>
-                        <b class="kpi-value success-text">None Detected</b>
-                        <span class="kpi-sub">Safe for Fabric Catalog</span>
-                    </div>
-                </div>
-
-                <div class="table-container">
-                    <h3>Extracted Sheets & Chart Inventory</h3>
-                    <table class="custom-table">
-                        <thead>
-                            <tr>
-                                <th>Sheet Name</th>
-                                <th>Chart Type</th>
-                                <th>Visual Title</th>
-                                <th>Dimensions</th>
-                                <th>Measures</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="assessment-tbody">
-                            <!-- Dynamic rows injected by script.js based on active QVF -->
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- TAB 3: REVIEW QUEUE -->
-            <section id="tab-review" class="tab-pane">
-                <h2>Phase 3: DAX Expression Review Queue</h2>
-                <p class="tab-desc">Inspect and approve LLM-translated DAX expressions for <b id="review-target-name">Helpdesk Management</b></p>
-                
-                <div class="table-container">
-                    <table class="custom-table">
-                        <thead>
-                            <tr>
-                                <th><input type="checkbox" checked></th>
-                                <th>Qlik Expression / Metric Column</th>
-                                <th>Translated DAX Formula</th>
-                                <th>LLM Confidence</th>
-                                <th>Status</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody id="review-tbody">
-                            <!-- Dynamic DAX rows injected by script.js based on active QVF -->
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="action-bar">
-                    <button class="btn-primary-block" style="width: auto; padding: 12px 28px;">
-                        <i class="fa-solid fa-check"></i> Approve All DAX Translations
+                <!-- Spans both columns: the run needs a source and a destination. -->
+                <div class="run-bar">
+                    <div class="conn-status hidden" id="run-status" role="alert" aria-live="assertive"></div>
+                    <button id="btn-migrate-qlik" class="btn-secondary-block">
+                        Migrate to Microsoft Fabric
                     </button>
                 </div>
+
+                <!--
+                  Run progress. Stays on this tab so starting a migration does not
+                  throw the user somewhere else; the Logs tab holds the detail for
+                  whoever wants it. One row per phase, in the order the engine runs
+                  them. Progress is per-app-completed, not a timer — a bar that
+                  advances on a clock would claim work that has not happened.
+                -->
+                <div class="run-progress hidden" id="run-progress">
+                    <div class="run-progress-head">
+                        <h3><i class="fa-solid fa-gauge-high"></i> Migration progress</h3>
+                        <div class="run-progress-meta">
+                            <span id="run-progress-count">0 of 0 apps</span>
+                            <a href="#logs" class="btn-link" id="btn-goto-logs">View full logs</a>
+                        </div>
+                    </div>
+
+                    <div class="phase-bars" id="phase-bars">
+                        <div class="phase-bar" data-phase="assess">
+                            <div class="phase-bar-top">
+                                <span class="phase-bar-dot" style="background: #3b82f6;"></span>
+                                <span class="phase-bar-name">Assessment</span>
+                                <span class="phase-bar-state" id="progress-state-assess">Waiting</span>
+                            </div>
+                            <div class="phase-bar-track"><div class="phase-bar-fill" id="progress-fill-assess" style="background: #3b82f6;"></div></div>
+                            <p class="phase-bar-note" id="progress-note-assess">Reads the .qvf binary: load script, schema &amp; sheets</p>
+                        </div>
+
+                        <div class="phase-bar" data-phase="parse">
+                            <div class="phase-bar-top">
+                                <span class="phase-bar-dot" style="background: #06b6d4;"></span>
+                                <span class="phase-bar-name">Parsing</span>
+                                <span class="phase-bar-state" id="progress-state-parse">Waiting</span>
+                            </div>
+                            <div class="phase-bar-track"><div class="phase-bar-fill" id="progress-fill-parse" style="background: #06b6d4;"></div></div>
+                            <p class="phase-bar-note" id="progress-note-parse">Builds model.bim — tables, columns &amp; DAX measures</p>
+                        </div>
+
+                        <div class="phase-bar" data-phase="map">
+                            <div class="phase-bar-top">
+                                <span class="phase-bar-dot" style="background: #8b5cf6;"></span>
+                                <span class="phase-bar-name">Mapping</span>
+                                <span class="phase-bar-state" id="progress-state-map">Waiting</span>
+                            </div>
+                            <div class="phase-bar-track"><div class="phase-bar-fill" id="progress-fill-map" style="background: #8b5cf6;"></div></div>
+                            <p class="phase-bar-note" id="progress-note-map">Lays out report pages &amp; visuals</p>
+                        </div>
+
+                        <div class="phase-bar" data-phase="gen">
+                            <div class="phase-bar-top">
+                                <span class="phase-bar-dot" style="background: #10b981;"></span>
+                                <span class="phase-bar-name">Report Generation</span>
+                                <span class="phase-bar-state" id="progress-state-gen">Waiting</span>
+                            </div>
+                            <div class="phase-bar-track"><div class="phase-bar-fill" id="progress-fill-gen" style="background: #10b981;"></div></div>
+                            <p class="phase-bar-note" id="progress-note-gen">Writes .pbit, audit report &amp; PBIP bundle</p>
+                        </div>
+                    </div>
+
+                    <!-- The most recent line, so the panel shows life without
+                         reproducing the whole stream. -->
+                    <div class="run-progress-tail" id="run-progress-tail"></div>
+                </div>
             </section>
 
-            <!-- TAB 4: ARTIFACTS -->
-            <section id="tab-artifacts" class="tab-pane">
-                <h2>Phase 4: Generated Power BI Artifacts</h2>
-                <p class="tab-desc">All standalone templates, Fabric projects, and audit logs stored in <code id="artifact-dir-subtitle">Helpdesk_PowerBI_Project/</code></p>
-                
-                <div class="artifacts-grid">
-                    <div class="artifact-card" style="border: 2px solid #00c853; box-shadow: 0 0 15px rgba(0, 200, 83, 0.2);">
-                        <div class="art-icon" style="color: #00c853;"><i class="fa-solid fa-folder-tree"></i></div>
-                        <div class="art-details">
-                            <h3 id="artifact-pbip-title">Helpdesk Management.pbip <span style="background: #00c853; color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 12px; margin-left: 8px;">★ RECOMMENDED (DATA + VISUALS)</span></h3>
-                            <p><b>100% Data & Visuals Included!</b> Full Microsoft Fabric PBIP Project with 100 rows of data and KPI Charts. <b style="color: #00c853;">👉 Step 1: Extract (Unzip) downloaded folder. 👉 Step 2: Double-click the .pbip file inside!</b></p>
-                            <div class="art-meta" style="color: #00c853; font-weight: 600;">Project Bundle • Full Tabular Data & Canvas Charts Included</div>
-                        </div>
-                        <button class="btn-download" id="artifact-pbip-btn" style="background: #00c853; color: white; font-weight: bold;">
-                            <i class="fa-solid fa-download"></i> Download .PBIP (Full Data & Visuals - RECOMMENDED)
+            <!--
+              TAB: LOGS
+              One stream for the whole run. The four phases used to each own a box on
+              the Run migration tab, which meant four short scrollbacks and no way to
+              read the run in the order it happened. Every line lands here tagged with
+              the phase that emitted it, and the chips filter down to one phase.
+            -->
+            <section id="tab-logs" class="tab-pane">
+                <h2>Migration engine — logs</h2>
+                <p class="tab-desc">Every line the four phases emitted, in the order they happened. The stream is replaced at the start of each run.</p>
+
+                <div class="logs-toolbar">
+                    <div class="log-filters" role="group" aria-label="Filter by phase">
+                        <button type="button" class="log-filter active" data-phase="all">All</button>
+                        <button type="button" class="log-filter" data-phase="assess">Assessment</button>
+                        <button type="button" class="log-filter" data-phase="parse">Parsing</button>
+                        <button type="button" class="log-filter" data-phase="map">Mapping</button>
+                        <button type="button" class="log-filter" data-phase="gen">Report Generation</button>
+                        <button type="button" class="log-filter log-filter-errors" data-phase="errors">
+                            <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> Failures
                         </button>
                     </div>
-
-                    <div class="artifact-card">
-                        <div class="art-icon"><i class="fa-solid fa-file-powerpoint"></i></div>
-                        <div class="art-details">
-                            <h3 id="artifact-pbit-title">Helpdesk Management.pbit</h3>
-                            <p>Standalone Power BI Template file (Schema & metadata structure without offline rows).</p>
-                            <div class="art-meta" id="artifact-pbit-meta">Size: 5.3 KB • Standalone Template</div>
-                        </div>
-                        <button class="btn-download" id="artifact-pbit-btn">
-                            <i class="fa-solid fa-bolt"></i> Download .PBIT (Template Schema Only)
-                        </button>
+                    <div class="logs-toolbar-actions">
+                        <span class="console-status" id="console-status-badge">IDLE</span>
+                        <button type="button" class="btn-link" id="btn-copy-logs">Copy</button>
                     </div>
+                </div>
 
-                    <div class="artifact-card">
-                        <div class="art-icon"><i class="fa-solid fa-file-shield"></i></div>
-                        <div class="art-details">
-                            <h3>MIGRATION_AUDIT_REPORT.md</h3>
-                            <p>Executive compliance audit report generated by AutoGen Orchestrator.</p>
-                            <div class="art-meta">Size: 2.6 KB • Compliance Log</div>
-                        </div>
-                        <button class="btn-download" id="artifact-audit-btn">
-                            <i class="fa-solid fa-file-contract"></i> Open Audit Report
-                        </button>
+                <div class="agent-empty-state" id="logs-empty-state">
+                    <i class="fa-solid fa-terminal"></i>
+                    <h3>No logs yet</h3>
+                    <p>Start a migration on the <b>Run migration</b> tab and the engine's output streams in here.</p>
+                </div>
+
+                <div class="console-logs hidden" id="console-logs-body" role="log" aria-live="polite"></div>
+
+                <p class="log-filter-empty hidden" id="logs-filter-empty">No lines from that phase in this run.</p>
+
+                <div class="console-metrics hidden" id="console-metrics-row">
+                    <div class="metric-card">
+                        <span>Sheets Converted</span>
+                        <b id="metric-sheets">2 Pages</b>
+                    </div>
+                    <div class="metric-card">
+                        <span>Visuals Mapped</span>
+                        <b id="metric-visuals">10 Charts</b>
+                    </div>
+                    <div class="metric-card">
+                        <span>DAX Measures</span>
+                        <b id="metric-dax">12 Auto-Mapped</b>
+                    </div>
+                    <div class="metric-card">
+                        <span>Discrepancy Check</span>
+                        <b id="metric-discrepancy">Not computed</b>
                     </div>
                 </div>
             </section>
 
-            <!-- TAB 5: JOB HISTORY -->
+            <!--
+              TAB: AGENTS
+              Reached from the Agents group in the sidebar. The overview below is the
+              landing pane; the four detail panes are opened from the sidebar sub-items
+              or from the overview cards. The shells are static — the KPI row, the
+              detail tables and the log stream are rendered by script.js from the same
+              registry the migration run uses, so an agent pane never claims more than
+              the uploaded .qvf files actually provide.
+            -->
+            <section id="tab-agents" class="tab-pane">
+                <!-- AGENTS OVERVIEW (landing pane for the group) -->
+                <div id="sub-agents-overview" class="subtab-pane active">
+                    <h2>Migration engine phases</h2>
+                    <p class="tab-desc">The engine in <code>cli/ai_qvf_to_powerbi.py</code> runs these four phases over the .qvf binary. Open one to see its KPIs, output tables and the log lines that phase really printed.</p>
+
+                    <div class="agent-card-grid">
+                        <button type="button" class="agent-card" data-subtab="sub-agent-assess">
+                            <span class="agent-live-avatar agent-card-avatar" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fa-solid fa-user-shield"></i></span>
+                            <span class="agent-card-body">
+                                <span class="agent-card-phase">Phase 1</span>
+                                <span class="agent-card-title">Assessment</span>
+                                <span class="agent-card-desc">Reads the .qvf binary: load script, schema and sheet inventory</span>
+                            </span>
+                            <span class="agent-card-foot">
+                                <span class="nav-agent-state" id="card-state-assess">idle</span>
+                                <span class="agent-card-go">Open <i class="fa-solid fa-arrow-right"></i></span>
+                            </span>
+                        </button>
+
+                        <button type="button" class="agent-card" data-subtab="sub-agent-parse">
+                            <span class="agent-live-avatar agent-card-avatar" style="background: linear-gradient(135deg, #06b6d4, #0891b2);"><i class="fa-solid fa-diagram-project"></i></span>
+                            <span class="agent-card-body">
+                                <span class="agent-card-phase">Phase 2</span>
+                                <span class="agent-card-title">Parsing</span>
+                                <span class="agent-card-desc">Builds model.bim — tables, columns and DAX measures</span>
+                            </span>
+                            <span class="agent-card-foot">
+                                <span class="nav-agent-state" id="card-state-parse">idle</span>
+                                <span class="agent-card-go">Open <i class="fa-solid fa-arrow-right"></i></span>
+                            </span>
+                        </button>
+
+                        <button type="button" class="agent-card" data-subtab="sub-agent-map">
+                            <span class="agent-live-avatar agent-card-avatar" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);"><i class="fa-solid fa-brain"></i></span>
+                            <span class="agent-card-body">
+                                <span class="agent-card-phase">Phase 3</span>
+                                <span class="agent-card-title">Mapping</span>
+                                <span class="agent-card-desc">Lays out report pages and visuals</span>
+                            </span>
+                            <span class="agent-card-foot">
+                                <span class="nav-agent-state" id="card-state-map">idle</span>
+                                <span class="agent-card-go">Open <i class="fa-solid fa-arrow-right"></i></span>
+                            </span>
+                        </button>
+
+                        <button type="button" class="agent-card" data-subtab="sub-agent-gen">
+                            <span class="agent-live-avatar agent-card-avatar" style="background: linear-gradient(135deg, #10b981, #047857);"><i class="fa-solid fa-boxes-packing"></i></span>
+                            <span class="agent-card-body">
+                                <span class="agent-card-phase">Phase 4</span>
+                                <span class="agent-card-title">Report Generation</span>
+                                <span class="agent-card-desc">Writes .pbit, the audit report and the PBIP bundle</span>
+                            </span>
+                            <span class="agent-card-foot">
+                                <span class="nav-agent-state" id="card-state-gen">idle</span>
+                                <span class="agent-card-go">Open <i class="fa-solid fa-arrow-right"></i></span>
+                            </span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- AGENT PANE: ASSESSMENTAGENT -->
+                <div id="sub-agent-assess" class="subtab-pane agent-detail-pane">
+                    <button type="button" class="btn-back-inline" data-subtab="sub-agents-overview">
+                        <i class="fa-solid fa-arrow-left"></i> All agents
+                    </button>
+                    <div class="agent-detail-head">
+                        <div class="agent-detail-identity">
+                            <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fa-solid fa-user-shield"></i></div>
+                            <div>
+                                <h2>Assessment</h2>
+                                <p class="agent-detail-role">Phase 1 &middot; Reads the .qvf binary: load script, schema and sheet inventory</p>
+                            </div>
+                        </div>
+                        <div class="agent-detail-status">
+                            <span class="agent-badge-tag" id="badge-detail-assess">IDLE</span>
+                            <span class="agent-run-state" id="runstate-assess">Not run yet</span>
+                        </div>
+                    </div>
+
+                    <div class="kpi-row agent-kpi-row" id="kpi-agent-assess"></div>
+
+                    <div class="agent-detail-grid">
+                        <div class="agent-detail-main" id="detail-body-assess"></div>
+                    </div>
+                </div>
+
+                <!-- AGENT PANE: REPORTPARSINGAGENT -->
+                <div id="sub-agent-parse" class="subtab-pane agent-detail-pane">
+                    <button type="button" class="btn-back-inline" data-subtab="sub-agents-overview">
+                        <i class="fa-solid fa-arrow-left"></i> All agents
+                    </button>
+                    <div class="agent-detail-head">
+                        <div class="agent-detail-identity">
+                            <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #06b6d4, #0891b2);"><i class="fa-solid fa-diagram-project"></i></div>
+                            <div>
+                                <h2>Parsing</h2>
+                                <p class="agent-detail-role">Phase 2 &middot; Builds model.bim — tables, columns and DAX measures</p>
+                            </div>
+                        </div>
+                        <div class="agent-detail-status">
+                            <span class="agent-badge-tag" id="badge-detail-parse">IDLE</span>
+                            <span class="agent-run-state" id="runstate-parse">Not run yet</span>
+                        </div>
+                    </div>
+
+                    <div class="kpi-row agent-kpi-row" id="kpi-agent-parse"></div>
+
+                    <div class="agent-detail-grid">
+                        <div class="agent-detail-main" id="detail-body-parse"></div>
+                    </div>
+                </div>
+
+                <!-- AGENT PANE: MAPPINGAGENT -->
+                <div id="sub-agent-map" class="subtab-pane agent-detail-pane">
+                    <button type="button" class="btn-back-inline" data-subtab="sub-agents-overview">
+                        <i class="fa-solid fa-arrow-left"></i> All agents
+                    </button>
+                    <div class="agent-detail-head">
+                        <div class="agent-detail-identity">
+                            <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);"><i class="fa-solid fa-brain"></i></div>
+                            <div>
+                                <h2>Mapping</h2>
+                                <p class="agent-detail-role">Phase 3 &middot; Lays out report pages and visuals</p>
+                            </div>
+                        </div>
+                        <div class="agent-detail-status">
+                            <span class="agent-badge-tag" id="badge-detail-map">IDLE</span>
+                            <span class="agent-run-state" id="runstate-map">Not run yet</span>
+                        </div>
+                    </div>
+
+                    <div class="kpi-row agent-kpi-row" id="kpi-agent-map"></div>
+
+                    <div class="agent-detail-grid">
+                        <div class="agent-detail-main" id="detail-body-map"></div>
+                    </div>
+                </div>
+
+                <!-- AGENT PANE: REPORTGENERATIONAGENT -->
+                <div id="sub-agent-gen" class="subtab-pane agent-detail-pane">
+                    <button type="button" class="btn-back-inline" data-subtab="sub-agents-overview">
+                        <i class="fa-solid fa-arrow-left"></i> All agents
+                    </button>
+                    <div class="agent-detail-head">
+                        <div class="agent-detail-identity">
+                            <div class="agent-live-avatar agent-detail-avatar" style="background: linear-gradient(135deg, #10b981, #047857);"><i class="fa-solid fa-boxes-packing"></i></div>
+                            <div>
+                                <h2>Report Generation</h2>
+                                <p class="agent-detail-role">Phase 4 &middot; Writes .pbit, the audit report and the PBIP bundle</p>
+                            </div>
+                        </div>
+                        <div class="agent-detail-status">
+                            <span class="agent-badge-tag" id="badge-detail-gen">IDLE</span>
+                            <span class="agent-run-state" id="runstate-gen">Not run yet</span>
+                        </div>
+                    </div>
+
+                    <div class="kpi-row agent-kpi-row" id="kpi-agent-gen"></div>
+
+                    <div class="agent-detail-grid">
+                        <div class="agent-detail-main" id="detail-body-gen"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: AGENTS SUMMARY -->
+            <section id="tab-summary" class="tab-pane">
+                <!-- HERO EXECUTIVE BANNER -->
+                <div class="summary-hero">
+                    <div class="summary-hero-content">
+                        <div class="summary-hero-pill"><i class="fa-solid fa-microchip"></i> How It Works</div>
+                        <h1>Migration Engine Overview</h1>
+                        <p>Here is a simple look at the 4 steps our migration engine takes to convert your Qlik app into a Power BI project. We guarantee 100% accurate data models, smart AI translations, and a completely transparent process.</p>
+                    </div>
+                    <div class="summary-hero-stats">
+                        <div class="summary-stat-pill">
+                            <span class="stat-num">4</span>
+                            <span class="stat-lbl">Simple Steps</span>
+                        </div>
+                        <div class="summary-stat-pill">
+                            <span class="stat-num">100%</span>
+                            <span class="stat-lbl">Accurate Models</span>
+                        </div>
+                        <div class="summary-stat-pill">
+                            <span class="stat-num">Smart</span>
+                            <span class="stat-lbl">AI Translation</span>
+                        </div>
+                        <div class="summary-stat-pill">
+                            <span class="stat-num">Zero</span>
+                            <span class="stat-lbl">Data Guessing</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="summary-cards-grid">
+                    <!-- CARD 1: ASSESSMENT -->
+                    <div class="summary-card">
+                        <div class="summary-card-header">
+                            <div class="summary-card-icon" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);">
+                                <i class="fa-solid fa-user-shield"></i>
+                            </div>
+                            <div class="summary-card-meta">
+                                <span class="summary-phase-badge badge-blue">Phase 1 &middot; Extract</span>
+                                <h3 class="summary-card-title">1. Read &amp; Extract</h3>
+                            </div>
+                        </div>
+
+                        <div class="summary-card-job">
+                            <span class="summary-job-label"><i class="fa-solid fa-bolt"></i> Goal:</span>
+                            <span class="summary-job-text">Safely read everything out of your Qlik file without altering any of your original data.</span>
+                        </div>
+
+                        <div class="summary-card-body">
+                            <p class="summary-card-paragraph">
+                                A Qlik file is a compressed package. We open it up carefully and extract all the essential building blocks:
+                            </p>
+                            <ul class="summary-feature-list">
+                                <li><i class="fa-solid fa-circle-check"></i> <span><strong>Load Script:</strong> How your data is fetched and shaped</span></li>
+                                <li><i class="fa-solid fa-circle-check"></i> <span><strong>Data Model:</strong> Your tables, columns, and relationships</span></li>
+                                <li><i class="fa-solid fa-circle-check"></i> <span><strong>Visuals:</strong> All your charts, tables, and formulas</span></li>
+                                <li><i class="fa-solid fa-circle-check"></i> <span><strong>Settings:</strong> App variables and general properties</span></li>
+                            </ul>
+                            <div class="summary-card-note warning-note">
+                                <i class="fa-solid fa-triangle-exclamation"></i>
+                                <span><strong>Safe Recovery:</strong> If any part of the file is unreadable, we report exactly what's missing instead of making up data.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- CARD 2: PARSING -->
+                    <div class="summary-card">
+                        <div class="summary-card-header">
+                            <div class="summary-card-icon" style="background: linear-gradient(135deg, #06b6d4, #0891b2);">
+                                <i class="fa-solid fa-diagram-project"></i>
+                            </div>
+                            <div class="summary-card-meta">
+                                <span class="summary-phase-badge badge-cyan">Phase 2 &middot; Model</span>
+                                <h3 class="summary-card-title">2. Build the Model</h3>
+                            </div>
+                        </div>
+
+                        <div class="summary-card-job">
+                            <span class="summary-job-label"><i class="fa-solid fa-bolt"></i> Goal:</span>
+                            <span class="summary-job-text">Recreate your Qlik data structure as a native Power BI Semantic Model.</span>
+                        </div>
+
+                        <div class="summary-card-body">
+                            <p class="summary-card-paragraph">
+                                We take the tables and relationships we found in Phase 1 and build the Power BI data model (<code>model.bim</code>). 
+                            </p>
+                            <ul class="summary-feature-list">
+                                <li><i class="fa-solid fa-robot"></i> <span><strong>AI Translation:</strong> Our AI Brain safely translates complex Qlik formulas into Power BI DAX code</span></li>
+                                <li><i class="fa-solid fa-database"></i> <span><strong>Data Connections:</strong> We set up Power Query code to load your tables</span></li>
+                                <li><i class="fa-solid fa-network-wired"></i> <span><strong>Relationships:</strong> We keep your primary and foreign keys connected</span></li>
+                            </ul>
+                            <div class="summary-card-note info-note">
+                                <i class="fa-solid fa-shield-halved"></i>
+                                <span><strong>No Guessing Rule:</strong> We never invent data types or make wild guesses. If a formula is too complex to translate automatically, we mark it clearly for your review.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- CARD 3: MAPPING -->
+                    <div class="summary-card">
+                        <div class="summary-card-header">
+                            <div class="summary-card-icon" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);">
+                                <i class="fa-solid fa-layer-group"></i>
+                            </div>
+                            <div class="summary-card-meta">
+                                <span class="summary-phase-badge badge-purple">Phase 3 &middot; Report</span>
+                                <h3 class="summary-card-title">3. Create the Report</h3>
+                            </div>
+                        </div>
+
+                        <div class="summary-card-job">
+                            <span class="summary-job-label"><i class="fa-solid fa-bolt"></i> Goal:</span>
+                            <span class="summary-job-text">Convert your Qlik dashboard sheets into beautiful Power BI report pages.</span>
+                        </div>
+
+                        <div class="summary-card-body">
+                            <p class="summary-card-paragraph">
+                                Every chart in Qlik is mapped directly to its closest Power BI equivalent:
+                            </p>
+                            <div class="summary-mapping-chips">
+                                <span class="chip">Bar Chart &rarr; Column Chart</span>
+                                <span class="chip">Line Chart &rarr; Line Chart</span>
+                                <span class="chip">Pie Chart &rarr; Pie Chart</span>
+                                <span class="chip">KPI &rarr; Card</span>
+                                <span class="chip">Table &rarr; Table</span>
+                                <span class="chip">Filter &rarr; Slicer</span>
+                                <span class="chip">Gauge &rarr; Card</span>
+                                <span class="chip">Treemap &rarr; Treemap</span>
+                            </div>
+                            <p class="summary-card-paragraph" style="margin-top:8px;">
+                                We place every visual precisely on the page and connect them to the data model we built in Phase 2.
+                            </p>
+                            <div class="summary-card-note alert-note">
+                                <i class="fa-solid fa-circle-info"></i>
+                                <span><strong>Visual Changes:</strong> Since Power BI doesn't have an exact match for every Qlik visual (like specific gauge styles), we use the cleanest, most standard native Power BI visuals to ensure your report works perfectly.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- CARD 4: REPORT GENERATION -->
+                    <div class="summary-card">
+                        <div class="summary-card-header">
+                            <div class="summary-card-icon" style="background: linear-gradient(135deg, #10b981, #047857);">
+                                <i class="fa-solid fa-box-archive"></i>
+                            </div>
+                            <div class="summary-card-meta">
+                                <span class="summary-phase-badge badge-green">Phase 4 &middot; Package</span>
+                                <h3 class="summary-card-title">4. Package the Results</h3>
+                            </div>
+                        </div>
+
+                        <div class="summary-card-job">
+                            <span class="summary-job-label"><i class="fa-solid fa-bolt"></i> Goal:</span>
+                            <span class="summary-job-text">Bundle everything together into files you can open, share, or publish.</span>
+                        </div>
+
+                        <div class="summary-card-body">
+                            <p class="summary-card-paragraph">
+                                We wrap up the whole process by creating ready-to-use Power BI files and a clear summary report of what happened:
+                            </p>
+                            <ul class="summary-feature-list">
+                                <li><i class="fa-solid fa-file-code"></i> <span><strong>Power BI Template (<code>.pbit</code>):</strong> A file you can double-click to open right in Power BI Desktop</span></li>
+                                <li><i class="fa-solid fa-file-zipper"></i> <span><strong>Fabric Project (<code>.zip</code>):</strong> A folder ready to be instantly published to your online Microsoft Fabric workspace</span></li>
+                                <li><i class="fa-solid fa-list-check"></i> <span><strong>Audit Report:</strong> A simple text file detailing the exact results of the migration</span></li>
+                            </ul>
+                            <div class="summary-card-note success-note">
+                                <i class="fa-solid fa-circle-check"></i>
+                                <span><strong>Full Transparency:</strong> The audit report will list out every single item that might need your manual attention, so you are never left guessing!</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: JOB HISTORY -->
             <section id="tab-history" class="tab-pane">
                 <h2>Autonomous Migration Job History</h2>
-                <p class="tab-desc">Audit trail of all Microsoft AutoGen multi-agent execution runs</p>
+                <p class="tab-desc">Audit trail of migration engine runs</p>
                 
-                <div class="table-container">
-                    <table class="custom-table">
-                        <thead>
-                            <tr>
-                                <th>Job ID</th>
-                                <th>Target File</th>
-                                <th>Sheets</th>
-                                <th>Visuals</th>
-                                <th>Execution Time</th>
-                                <th>Discrepancy Audit</th>
-                                <th>Date & Time</th>
-                            </tr>
-                        </thead>
-                        <tbody id="history-tbody">
-                            <!-- Dynamic history injected by script.js -->
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- TAB 6: SETTINGS -->
-            <section id="tab-settings" class="tab-pane">
-                <h2>Platform & AI Brain Settings</h2>
-                <p class="tab-desc">Configure LLM Provider endpoints, Qlik Tenant REST API, and AutoGen multi-agent parameters</p>
-                
-                <div class="settings-grid">
-                    <div class="settings-card">
-                        <h3><i class="fa-solid fa-brain"></i> AutoGen AI Brain Provider</h3>
-                        <div class="form-group">
-                            <label>Select LLM Provider for DAX & M-Query Translation</label>
-                            <select class="custom-select" id="brain-selector">
-                                <option value="ollama" selected>Ollama (llama3.2 - Local Offline)</option>
-                                <option value="azure">Azure OpenAI (GPT-4o)</option>
-                                <option value="openai">OpenAI (GPT-4o-mini)</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>AZURE_OPENAI_ENDPOINT</label>
-                            <input type="text" class="custom-input" placeholder="https://your-tenant.openai.azure.com/">
-                        </div>
-                        <div class="form-group">
-                            <label>AZURE_OPENAI_API_KEY</label>
-                            <input type="password" class="custom-input" placeholder="Paste API Key here...">
-                        </div>
-                        <button class="btn-primary-block" style="width: auto; padding: 10px 24px;">Save AI Credentials</button>
-                    </div>
-
-                    <div class="settings-card">
-                        <h3><i class="fa-solid fa-cloud"></i> Qlik Cloud / Enterprise REST API</h3>
-                        <div class="form-group">
-                            <label>Qlik Tenant URL</label>
-                            <input type="text" class="custom-input" placeholder="https://your-tenant.us.qlikcloud.com">
-                        </div>
-                        <div class="form-group">
-                            <label>Qlik API Token / Certificate</label>
-                            <input type="password" class="custom-input" placeholder="eyJhbGciOiJSUzI1NiIs...">
-                        </div>
-                        <button class="btn-primary-block" style="width: auto; padding: 10px 24px;">Save Tenant Settings</button>
+                <!-- The list and one run's detail are the two states of this tab;
+                     only ever one is shown. -->
+                <div id="history-list">
+                    <div class="table-container">
+                        <table class="custom-table">
+                            <thead>
+                                <tr>
+                                    <th>Job ID</th>
+                                    <th>Target File</th>
+                                    <th>Sheets</th>
+                                    <th>Visuals</th>
+                                    <th>Execution Time</th>
+                                    <th>Date &amp; Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-tbody">
+                                <!-- Dynamic history injected by script.js -->
+                            </tbody>
+                        </table>
                     </div>
                 </div>
+
+                <!-- Rendered from what was recorded with that run. Runs finished
+                     before this existed have no detail and say so. -->
+                <div id="history-detail" class="hidden"></div>
             </section>
+
         </main>
     </div>
 
-    <script src="script.js?v=20260804_multiupload_v9"></script>
+    <script src="script.js?v=5"></script>
 </body>
 </html>

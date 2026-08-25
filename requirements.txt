@@ -1,0 +1,48 @@
+# Runtime dependencies for the migration engine.
+#
+# Install them into the SAME interpreter that runs dev_server.py. The engine
+# runs as a subprocess of the server and inherits its sys.executable, so a
+# machine with both a python.org install and the Microsoft Store build can have
+# these present in one and missing in the other -- which shows up as a
+# migration that completes with every table empty, not as an install error.
+#
+#     python -m pip install -r requirements.txt
+#
+# Everything else the tool uses is in the standard library.
+
+# QIX engine websocket, for reading an app's real rows from Qlik Cloud.
+# Without it every table migrates as schema-only.
+websocket-client>=1.6
+
+# Parquet writer, for staging large tables into a Fabric Lakehouse
+# (--stage-lakehouse / any tenant-sourced run).
+pyarrow>=14
+
+# Reader for the .hyper extracts bundled inside a .twbx, so a migrated Tableau
+# workbook carries its rows and not just its schema.
+#
+# OPTIONAL, and deliberately last: it is a large native package, and a Tableau
+# workbook on a live database connection has no extract for it to read. Without
+# it, such a migration still completes -- the model is built with structure
+# only, and the audit report says so per table rather than leaving the empty
+# result unexplained. Qlik migrations never need it.
+tableauhyperapi>=0.0.14000 ; python_version >= "3.8"
+
+# Reader for Excel files packaged inside a .twbx. A workbook connected to a
+# local file and saved WITHOUT an extract bundles the source file itself rather
+# than a .hyper, so this is what carries the rows in that case. CSV and TSV need
+# nothing extra; only .xlsx/.xls do.
+#
+# OPTIONAL for the same reason as above: without it such a workbook still
+# migrates, with its real schema and no rows, and says so per table.
+openpyxl>=3.1
+
+# Reader for the live database a Tableau workbook connects to, when the
+# workbook has no extract and so packages no rows of its own.
+#
+# OPTIONAL, for the same reason as the line above and the mirror of it: this
+# one is needed exactly when that one is not. Without it a live-connection
+# workbook still migrates -- the run falls back to asking Tableau for each
+# worksheet's data, and the audit report records that those rows are the
+# sheet's rather than the table's. Qlik migrations never need it.
+snowflake-connector-python>=3.0 ; python_version >= "3.8"

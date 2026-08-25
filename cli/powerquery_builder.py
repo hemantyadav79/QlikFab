@@ -25,13 +25,34 @@ TYPE_DOUBLE = "double"
 TYPE_DATETIME = "dateTime"
 TYPE_BOOLEAN = "boolean"
 
-# Tabular type -> Power Query type literal.
+# Tabular type -> Power Query type literal, in *expression* position: the
+# {"Column", <type>} pairs handed to Table.TransformColumnTypes. The `type`
+# keyword is required there.
 _M_TYPES = {
     TYPE_STRING: "type text",
     TYPE_INT64: "Int64.Type",
     TYPE_DOUBLE: "type number",
     TYPE_DATETIME: "type datetime",
     TYPE_BOOLEAN: "type logical",
+}
+
+# The same types in *field-specification* position -- the `[Name = <type>]`
+# entries of a `type table [...]` row type.
+#
+# These are NOT interchangeable with the above. A field specification's type is
+# parsed as a primary expression, so a bare primitive name (`text`) or a type
+# value (`Int64.Type`) is accepted while the `type text` keyword form is not.
+# Emitting `type text` here produced a document the mashup engine rejected with
+# "Token ',' expected" -- it had failed to parse the field's type and so read
+# the field list as unterminated. The message named neither the table nor the
+# column, and the same literal is correct one line away in a
+# Table.TransformColumnTypes call, which is what made this expensive to find.
+_M_FIELD_TYPES = {
+    TYPE_STRING: "text",
+    TYPE_INT64: "Int64.Type",
+    TYPE_DOUBLE: "number",
+    TYPE_DATETIME: "datetime",
+    TYPE_BOOLEAN: "logical",
 }
 
 # Qlik system field tags that carry type information.
@@ -42,15 +63,43 @@ _TEXT_TAGS = {"$text", "$ascii"}
 
 
 def escape_m_string(value: str) -> str:
-    """Escape a value for embedding in an M string literal."""
-    return str(value).replace('"', '""')
+    """
+    Escape a value for embedding in an M string literal or quoted identifier.
+
+    M has exactly one escape mechanism inside quoted text: `#(...)`. Doubling
+    the quote character is therefore not sufficient on its own --
+
+      * `#(` opens an escape sequence, so a literal `#` that happens to be
+        followed by `(` has to be written `#(#)`. Qlik field names like
+        `Revenue #(000s)` otherwise terminate the literal early and the mashup
+        parser reports a bare "Token ',' expected" from somewhere further down
+        the document.
+      * a raw CR, LF or TAB splits the token across lines, with the same result.
+
+    The `#(` substitution runs first so it cannot re-escape the `#(cr)` /
+    `#(lf)` / `#(tab)` sequences introduced immediately after it.
+    """
+    text = str(value).replace('"', '""')
+    text = text.replace("#(", "#(#)(")
+    return (
+        text.replace("\r", "#(cr)")
+            .replace("\n", "#(lf)")
+            .replace("\t", "#(tab)")
+    )
 
 
 def escape_m_identifier(name: str) -> str:
-    """Quote an identifier for M (#"Name with spaces")."""
-    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name or ""):
-        return name
-    return '#"%s"' % escape_m_string(name)
+    """
+    Quote an identifier for M (#"Name with spaces").
+
+    Always quoted, to avoid collisions with reserved keywords. An empty name is
+    not a legal M identifier even when quoted, so it is replaced rather than
+    emitted as `#""` -- a column with no name cannot be referenced anyway, and
+    a placeholder keeps the failure visible in the model instead of breaking
+    the whole mashup document.
+    """
+    escaped = escape_m_string(name)
+    return '#"%s"' % (escaped if escaped else "Column")
 
 
 # ----------------------------------------------------------------------
@@ -175,7 +224,7 @@ def _type_transform_list(columns: list, resolver: TypeResolver) -> str:
 def _schema_type_literal(columns: list, resolver: TypeResolver) -> str:
     parts = []
     for name in columns:
-        m_type = _M_TYPES.get(resolver.resolve(name), "type text")
+        m_type = _M_FIELD_TYPES.get(resolver.resolve(name), "text")
         parts.append("%s = %s" % (escape_m_identifier(name), m_type))
     return "type table [" + ", ".join(parts) + "]"
 
@@ -218,10 +267,16 @@ def _build_delimited(table, resolver: TypeResolver) -> list:
     source = table.source
     options = source.options or {}
 
+    # A tab delimiter is emitted as the M escape sequence itself, so it goes
+    # into the literal verbatim -- running it through escape_m_string would
+    # turn `#(tab)` into the four-character text `#(tab)`. Every other
+    # delimiter is user data and is escaped normally.
     delimiter = options.get("delimiter", ",")
     if delimiter is True:
         delimiter = ","
-    delimiter = {"\\t": "#(tab)", "tab": "#(tab)"}.get(str(delimiter).lower(), str(delimiter))
+    delimiter = str(delimiter)
+    tab_escape = {"\\t": "#(tab)", "tab": "#(tab)", "\t": "#(tab)"}
+    delimiter = tab_escape.get(delimiter.lower()) or escape_m_string(delimiter)
 
     codepage = str(options.get("codepage", "")).strip()
     encoding = ", Encoding = %s" % codepage if codepage in _KNOWN_CODEPAGES else ""
@@ -229,11 +284,11 @@ def _build_delimited(table, resolver: TypeResolver) -> list:
     columns = source_columns(table)
     lines = [
         "let",
-        "    // Migrated from Qlik: %s" % (source.path or source.relative_path),
+        "    /* Migrated from Qlik: %s */" % comment_safe(source.path or source.relative_path, 200),
         "    Source = Csv.Document(",
         "        File.Contents(%s)," % _path_expression(source),
         '        [Delimiter = "%s", QuoteStyle = QuoteStyle.Csv%s]'
-        % (escape_m_string(delimiter), encoding),
+        % (delimiter, encoding),
         "    ),",
     ]
 
@@ -268,7 +323,7 @@ def _build_excel(table, resolver: TypeResolver) -> list:
     columns = source_columns(table)
     lines = [
         "let",
-        "    // Migrated from Qlik: %s" % (source.path or source.relative_path),
+        "    /* Migrated from Qlik: %s */" % comment_safe(source.path or source.relative_path, 200),
         "    Workbook = Excel.Workbook(File.Contents(%s), null, true),"
         % _path_expression(source),
     ]
@@ -304,7 +359,7 @@ def _build_resident(table, resolver: TypeResolver) -> list:
     columns = table.field_names
     return [
         "let",
-        "    // Qlik RESIDENT load from table: %s" % source.resident_table,
+        "    /* Qlik RESIDENT load from table: %s */" % comment_safe(source.resident_table, 200),
         "    Source = %s," % escape_m_identifier(source.resident_table),
         "    Selected = Table.SelectColumns(Source, {%s}, MissingField.UseNull)"
         % ", ".join('"%s"' % escape_m_string(c) for c in columns if not _is_derived(table, c)),
@@ -370,7 +425,7 @@ def _build_inline(table, resolver: TypeResolver) -> list:
 
     return [
         "let",
-        "    // Qlik INLINE data, migrated verbatim (%d rows)" % len(body),
+        "    /* Qlik INLINE data, migrated verbatim (%d rows) */" % len(body),
         "    Source = #table({%s}, {%s}),"
         % (
             ", ".join('"%s"' % escape_m_string(h) for h in header),
@@ -383,6 +438,55 @@ def _build_inline(table, resolver: TypeResolver) -> list:
     ]
 
 
+def comment_safe(value: str, limit: int = 500) -> str:
+    """
+    Flatten a value so it cannot escape the `//` comment it is written into.
+
+    An M line comment ends at the newline. Interpolating a multi-line value --
+    a native SQL SELECT, a Tableau custom-SQL relation, a wrapped error message
+    -- therefore ends the comment early and leaves the remaining lines to be
+    parsed as code. The mashup engine reports that as a bare "Token ',' expected"
+    pointing at a line the author never wrote, which is close to impossible to
+    diagnose from the message alone.
+
+    Length is capped as well: these values can be a whole query, and a comment
+    that runs for pages helps nobody reading the generated M.
+    """
+    flattened = " ".join(str(value).split())
+    if len(flattened) > limit:
+        flattened = flattened[:limit].rstrip() + " ... (truncated)"
+    return flattened or "(unknown)"
+
+
+def unavailable_description(table) -> str:
+    """The explanation for a schema-only table, as prose for its description.
+
+    This used to be a fourteen-line `//` comment banner inside the query
+    itself. It was moved out because a mashup document is assembled from every
+    partition's M, and anything that disturbs a line boundary turns a `//`
+    comment into a swallowed query -- a failure Fabric reports only as
+    "Token ',' expected", naming neither the table nor the line.
+
+    A table description carries the same information where the user is more
+    likely to read it (Power BI shows it in the field list), and cannot break
+    the parser no matter what it contains.
+    """
+    source = table.source
+    original = source.path or source.relative_path or source.raw or "(unknown)"
+    # Derived here rather than passed in, so the reason table stays private to
+    # this module and callers cannot drift out of step with it.
+    reason = _UNAVAILABLE_REASONS.get(source.kind, _UNAVAILABLE_REASONS["unknown"])
+    return (
+        "SOURCE NOT AUTOMATICALLY MIGRATABLE. %s Original source: %s. "
+        "The schema is the real schema read from the source app; no sample rows "
+        "are generated, because fabricated data would render charts that look "
+        "correct but mean nothing. To finish this table, replace the Source step "
+        "with a connector for the upstream system, or export the source to CSV "
+        "and point the %s parameter at it."
+        % (comment_safe(reason, 300), comment_safe(original, 200), ROOT_PARAMETER)
+    )
+
+
 def _build_unavailable(table, resolver: TypeResolver, reason: str) -> list:
     """
     Emit the correct schema with zero rows.
@@ -391,24 +495,12 @@ def _build_unavailable(table, resolver: TypeResolver, reason: str) -> list:
     QVD files, which are a closed Qlik format. The table loads, the model is
     structurally complete, and the report opens; the visuals are simply empty
     until the user re-points the query. That is the honest outcome.
+
+    The query itself is deliberately minimal and carries no comments: see
+    `unavailable_description` for where the explanation went, and why.
     """
-    source = table.source
-    original = source.path or source.relative_path or source.raw or "(unknown)"
     return [
         "let",
-        "    // ================================================================",
-        "    // SOURCE NOT AUTOMATICALLY MIGRATABLE",
-        "    // %s" % reason,
-        "    // Original Qlik source: %s" % original,
-        "    //",
-        "    // The schema below is the real schema read from the Qlik app.",
-        "    // No sample rows are generated on purpose: fabricated data would",
-        "    // render charts that look correct but mean nothing.",
-        "    //",
-        "    // To finish this table, replace the Source step with a connector",
-        "    // for the upstream system, or export the source to CSV and point",
-        "    // the %s parameter at it." % ROOT_PARAMETER,
-        "    // ================================================================",
         "    Schema = #table(",
         "        %s," % _schema_type_literal(table.field_names, resolver),
         "        {}",
@@ -454,6 +546,117 @@ def build_partition_expression(table, resolver: TypeResolver) -> tuple:
 
     reason = _UNAVAILABLE_REASONS.get(kind, _UNAVAILABLE_REASONS["unknown"])
     return _build_unavailable(table, resolver, reason), "schema-only", table.field_names
+
+
+# ----------------------------------------------------------------------
+# Rows read from the Qlik engine, carried in the model itself
+# ----------------------------------------------------------------------
+
+def _parses_as(value, tabular_type) -> bool:
+    """Whether one non-null value can be written as `tabular_type` losslessly."""
+    text = str(value).strip()
+    try:
+        if tabular_type == TYPE_INT64:
+            int(text)
+        elif tabular_type == TYPE_DOUBLE:
+            float(text)
+        else:
+            return True
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def embedded_column_types(columns: list, rows: list, resolver: TypeResolver) -> dict:
+    """
+    The type each embedded column can actually be written as.
+
+    The resolver says what the .qvf claimed. This says what the rows support.
+    A column the migration typed numeric but which holds one unparseable value
+    is written as text for its whole length, because the alternative -- coercing
+    that value to null -- turns a visible wrong value into invisible missing
+    data. The disagreement is the caller's to report.
+
+    QIX hands every value over as text (Qlik's own formatted representation),
+    so a thousands separator or a currency symbol is exactly how a genuinely
+    numeric column ends up here as text. That is a fidelity loss worth naming
+    rather than papering over.
+    """
+    effective = {}
+    for index, name in enumerate(columns):
+        declared = resolver.resolve(name)
+        if declared not in (TYPE_INT64, TYPE_DOUBLE):
+            effective[name] = TYPE_STRING if declared != TYPE_STRING else TYPE_STRING
+            continue
+        for row in rows:
+            value = row[index] if index < len(row) else None
+            if value is None or value == "":
+                continue
+            if not _parses_as(value, declared):
+                declared = TYPE_STRING
+                break
+        effective[name] = declared
+    return effective
+
+
+def _m_value(value, tabular_type) -> str:
+    """One cell as an M literal."""
+    if value is None or value == "":
+        return "null"
+    if tabular_type == TYPE_INT64:
+        return str(int(str(value).strip()))
+    if tabular_type == TYPE_DOUBLE:
+        return repr(float(str(value).strip()))
+    return '"%s"' % escape_m_string(value)
+
+
+def build_embedded_expression(table_name: str, columns: list, rows: list,
+                              resolver: TypeResolver, truncated: bool = False) -> list:
+    """
+    An M query that carries the rows themselves, as a #table literal.
+
+    Why the rows travel inside the model at all: the Fabric service cannot open
+    a file path on the machine that ran the migration, so a query pointing at
+    the original CSV publishes as an empty table. Rows read from the Qlik engine
+    are the only thing that survives the trip.
+
+    The declared type literal is built from `embedded_column_types`, not from
+    the resolver directly, so the table's declared schema always matches the
+    values written beneath it. Declaring Int64 over a value written as text is
+    not a cosmetic mismatch -- the mashup engine fails the whole document.
+    """
+    types = embedded_column_types(columns, rows, resolver)
+    schema = "type table [" + ", ".join(
+        "%s = %s" % (escape_m_identifier(name), _M_FIELD_TYPES.get(types[name], "text"))
+        for name in columns
+    ) + "]"
+
+    # Block comments, not `//`. These sit ahead of `let`, so if anything ever
+    # collapses a line boundary a line comment would swallow the entire query
+    # rather than one line of it.
+    lines = [
+        "/* %d row(s) read from the Qlik engine for %s. */"
+        % (len(rows), comment_safe(table_name, 120)),
+    ]
+    if truncated:
+        lines.append(
+            "/* Capped by the embedded-size budget; this is not the whole table. */")
+    lines += ["let", "    Source = #table("]
+    lines.append("        %s," % schema)
+    if not rows:
+        lines.append("        {}")
+    else:
+        lines.append("        {")
+        for position, row in enumerate(rows):
+            cells = ", ".join(
+                _m_value(row[i] if i < len(row) else None, types[name])
+                for i, name in enumerate(columns)
+            )
+            comma = "" if position == len(rows) - 1 else ","
+            lines.append("            {%s}%s" % (cells, comma))
+        lines.append("        }")
+    lines += ["    )", "in", "    Source"]
+    return lines
 
 
 def default_root_for(script_tables: list) -> str:
